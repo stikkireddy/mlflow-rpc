@@ -1,6 +1,7 @@
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import mlflow
 from databricks.sdk import WorkspaceClient
@@ -33,13 +34,14 @@ def ensure_3_parts(name: str) -> bool:
     return len(name.split(".")) == 3
 
 
-def save_model(experiment: Experiment, app: FastAPIFlavor, uc_model_path: str, run_name: str = "deployment") -> ModelVersion:
+def save_model(experiment: Experiment, app: FastAPIFlavor, uc_model_path: str,
+               run_name: str = "deployment", dest_path: Optional[str] = None) -> ModelVersion:
     if not ensure_3_parts(uc_model_path):
         raise ValueError \
             (f"Model path must be in the format 'catalog_name.schema_name.model_name' but got {uc_model_path}")
 
     src = Path(app.local_app_dir)
-    dest = Path("/Users/sri.tikkireddy/PycharmProjects/mlflow-rpc/tmp")
+    dest = Path(dest_path)
     ignore_file = src / ".gitignore"
     ignore_file = ignore_file if ignore_file.exists() else None
     copy_files(app.local_app_dir, dest, ignore_file)
@@ -49,6 +51,17 @@ def save_model(experiment: Experiment, app: FastAPIFlavor, uc_model_path: str, r
             python_model=app,
             signature=app.signature(),
             artifacts={app.code_key: str(dest)},
+            pip_requirements=[
+                "mlflow==2.9.2",
+                "cloudpickle==2.0.0",
+                "mlflow-skinny==2.9.2",
+                "fastapi==0.110.0",
+                "pandas==1.5.3",
+                "databricks-sdk==0.20.0",
+                "httpx==0.27.0",
+                "pathspec==0.12.1",
+                "mlrpc"
+            ]
         )
     return mlflow.register_model(f"runs:/{run.info.run_id}/model", uc_model_path)
 

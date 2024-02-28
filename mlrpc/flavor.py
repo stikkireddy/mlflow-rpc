@@ -228,7 +228,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
         code_path = None
         if context is not None:
-            code_path = context.artifacts[self._code_key]
+            code_path = context.artifacts[self.code_key]
         # add the app_path to the pythonpath to load modules
         # only if it's not already there
         # update site packages to include this app dir
