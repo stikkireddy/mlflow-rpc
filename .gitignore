@@ -287,3 +287,4 @@ tmp*
 model
 
 *.egg-info
+.DS_Store
