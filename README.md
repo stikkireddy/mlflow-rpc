@@ -1,8 +1,10 @@
-# mlflow rpc
+# mlrpc
 
-Host REST APIs in Databricks Serverless Model serving via this rpc framework.
+Host REST APIs via FastAPI in Databricks Serverless Model serving via this rpc abstraction.
 
-This framework offers you a restapi spec to be able to submit rpc calls and retrieve results.
+This tool is not a framework, in the sense that you do not modify your code! It acts as a build step/proxy layer
+and invokes your FastAPI code in a databricks serverless model serving environment and routes to the right endpoints 
+properly without you having to know about custom python models.
 
 ## Installation
 
