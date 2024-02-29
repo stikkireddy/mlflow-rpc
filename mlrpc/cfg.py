@@ -41,7 +41,7 @@ class ConfigFileProcessor(ConfigFileReader):
 INIT_CONFIG = """## The following lines are minimum required config
 ## You need to have the app section
 # [app]
-# name = demo_app
+# name = <app name>
 # uc_catalog = <catalog name>
 # uc_schema = <schema name>
 # endpoint_name = <endpoint name>
