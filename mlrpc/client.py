@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Sequence, Tuple, Literal, Dict, Union, List, Optional, Any
 from urllib.parse import urlencode
 
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import DataframeSplitInput
+
 from mlrpc.flavor import RequestObject, ResponseObject
 
 MethodType = Literal['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
@@ -17,10 +20,14 @@ class MLRPCResponse:
     request: RequestObject
     status_code: int
     headers: Optional[Sequence[Tuple[str, str]]] = None
-    body: Optional[str] = None
+    body: Optional[str | dict | list] = None
 
     @property
     def dict(self):
+        if self.body is None:
+            return {}
+        if isinstance(self.body, dict):
+            return self.body
         return json.loads(self.body)
 
     @property
@@ -29,7 +36,11 @@ class MLRPCResponse:
 
     @property
     def text(self):
-        return str(self.body)
+        if self.body is None:
+            return ""
+        if isinstance(self.body, str):
+            return self.body
+        return json.dumps(self.body)
 
 
 def generate_query_string(params: QueryParams) -> str:
@@ -149,8 +160,78 @@ class MLFlowURIDispatchHandler(DispatchHandler):
         )
             for response in responses]
 
+class LocalServingDispatchHandler(DispatchHandler):
+
+    def __init__(self, host: str = "0.0.0.0", port: int = 5000, endpoint: str = "/invocations"):
+        self._host = host
+        self._port = port
+        self._endpoint = endpoint
+
+    def dispatch(self, request: RequestObject) -> MLRPCResponse | List[MLRPCResponse]:
+        import httpx
+        url = f"http://{self._host}:{self._port}{self._endpoint}"
+
+        headers = request.headers or []
+        headers.append(("Content-Type", "application/json"))
+        resp = httpx.request(method="POST", url=url, headers=headers, json=request.encode().to_mlflow_df_split_dict())
+        predictions = resp.json()["predictions"]
+        resp_objs = [ResponseObject.from_serving_resp(pred) for pred in predictions]
+        return [MLRPCResponse(
+            request=request,
+            status_code=decoded_resp.status_code,
+            headers=decoded_resp.headers,
+            body=decoded_resp.content)
+        for decoded_resp in resp_objs]
+
+
+class ServingEndpointDispatchHandler(DispatchHandler):
+    def dispatch(self, request: RequestObject) -> MLRPCResponse | List[MLRPCResponse]:
+        serving_resp = self._ws.serving_endpoints.query(
+            self._endpoint_name,
+            dataframe_split=DataframeSplitInput(**request.encode().to_sdk_df_split())
+        )
+        decoded_resp = [ResponseObject.from_serving_resp(pred) for pred in serving_resp.predictions]
+        return [MLRPCResponse(
+            request=request,
+            status_code=200,
+            headers=response.headers,
+            body=response.content
+        )
+            for response in decoded_resp]
+
+    def __init__(self, endpoint_name: str, ws_client: WorkspaceClient = None):
+        self._endpoint_name = endpoint_name
+        self._ws = ws_client or WorkspaceClient()
+
 
 class MLFlowRPCClient(MLRPCClient):
 
     def __init__(self, uri: str):
         super().__init__(MLFlowURIDispatchHandler(uri))
+
+
+class ServingRPCClient(MLRPCClient):
+
+    def __init__(self, endpoint_name: str, ws_client: WorkspaceClient = None):
+        super().__init__(ServingEndpointDispatchHandler(endpoint_name, ws_client))
+
+
+class LocalServingRPCClient(MLRPCClient):
+
+    def __init__(self, host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations"):
+        super().__init__(LocalServingDispatchHandler(host, port, endpoint))
+
+
+class Client:
+
+    @staticmethod
+    def local(host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations") -> LocalServingRPCClient:
+        return LocalServingRPCClient(host, port, endpoint)
+
+    @staticmethod
+    def mlflow(uri: str) -> MLFlowRPCClient:
+        return MLFlowRPCClient(uri)
+
+    @staticmethod
+    def databricks(endpoint_name: str, ws_client: WorkspaceClient = None) -> ServingRPCClient:
+        return ServingRPCClient(endpoint_name, ws_client)

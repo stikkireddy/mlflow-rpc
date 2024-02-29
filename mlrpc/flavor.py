@@ -1,11 +1,14 @@
 import base64
 import json
+import os
 from dataclasses import dataclass
-from typing import Literal, Sequence, Tuple, Optional, List
+from pathlib import Path
+from typing import Literal, Sequence, Tuple, Optional, List, Dict
 
 import httpx
 import mlflow
 import pandas as pd
+from dotenv import dotenv_values
 
 
 def _b64encode(s: Optional[str]) -> Optional[str]:
@@ -92,6 +95,14 @@ class ResponseObject:
         )
 
     @classmethod
+    def from_serving_resp(cls, resp: Dict[str, str | int]):
+        return cls(
+            status_code=resp['status_code'],
+            headers=_decode_anything(resp['headers']),
+            content=_decode_anything(resp['content'])
+        )
+
+    @classmethod
     def from_httpx_resp(cls, resp: httpx.Response):
         return cls(
             status_code=resp.status_code,
@@ -133,6 +144,12 @@ class RequestObjectEncoded:
                 "columns": ["method", "headers", "path", "query_params", "content", "timeout"],
                 "data": [[self.method, self.headers, self.path, self.query_params, self.content, self.timeout]],
             }
+        }
+
+    def to_sdk_df_split(self):
+        return {
+            "columns": ["method", "headers", "path", "query_params", "content", "timeout"],
+            "data": [[self.method, self.headers, self.path, self.query_params, self.content, self.timeout]],
         }
 
     def to_mlflow_df_split_json(self):
@@ -183,6 +200,21 @@ class RequestObject:
         return [cls.from_request_enc(enc) for enc in request_objs_enc]
 
 
+MLRPC_ENV_VARS_PRELOAD_KEY = "MLRPC_ENV_VARS_PRELOAD"
+
+def load_mlrpc_env_vars() -> None:
+    env_vars = os.getenv(MLRPC_ENV_VARS_PRELOAD_KEY, "")
+    loaded_env_vars = dotenv_values(env_vars)
+    for k, v in loaded_env_vars.items():
+        os.environ[k] = v
+
+def pack_env_file_into_preload(envfile: Path, env_dict: Dict[str, str] = None):
+    env_dict = env_dict or os.environ
+    if envfile.exists() is True:
+        with envfile.open("r") as f:
+            env_vars = f.read()
+        env_dict[MLRPC_ENV_VARS_PRELOAD_KEY] = env_vars
+
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
     def __init__(self,
@@ -198,10 +230,11 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         self.app_obj = app_obj
         self._app = None
         self._client = None
-        self.validate()
 
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
         import site
+        print("Loading preloaded env vars")
+        load_mlrpc_env_vars()
         app_dir = app_dir_mlflow_artifacts or self.local_app_dir
         # only add if it's not already there
         site.addsitedir(app_dir)

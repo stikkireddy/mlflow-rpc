@@ -20,7 +20,11 @@ setup(
                       "fastapi",
                       "pandas",
                       "httpx",
-                      "databricks-sdk"],
+                      "databricks-sdk",
+                      "click",
+                      "click-configfile",
+                      "python-dotenv",
+                      "virtualenv"],
     setup_requires=["setuptools_scm"],
     use_scm_version=True,
     classifiers=[
@@ -30,7 +34,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'dbtunnel = dbtunnel.cli.cli:cli',
+            'mlrpc = mlrpc.cli:cli',
         ],
     },
     python_requires=">=3.10",
