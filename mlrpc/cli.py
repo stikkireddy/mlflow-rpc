@@ -12,7 +12,7 @@ from databricks.sdk import WorkspaceClient
 from mlrpc.cfg import ConfigFileProcessor, INIT_CONFIG
 from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_only_last_n_versions, \
     deploy_secret_env_file, deploy_serving_endpoint
-from mlrpc.dev.proxy import make_swagger_proxy
+from mlrpc.proxy import make_swagger_proxy
 from mlrpc.flavor import FastAPIFlavor, pack_env_file_into_preload
 from mlrpc.utils import execute, find_next_open_port, get_profile_contents, DatabricksProfile
 

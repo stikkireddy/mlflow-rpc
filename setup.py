@@ -17,6 +17,7 @@ setup(
     packages=find_packages(),
     install_requires=["pathspec",
                       "mlflow-skinny[databricks]",
+                      "scipy",
                       "fastapi",
                       "pandas",
                       "httpx",
