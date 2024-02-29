@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import os
 from dataclasses import dataclass
@@ -204,7 +205,8 @@ MLRPC_ENV_VARS_PRELOAD_KEY = "MLRPC_ENV_VARS_PRELOAD"
 
 def load_mlrpc_env_vars() -> None:
     env_vars = os.getenv(MLRPC_ENV_VARS_PRELOAD_KEY, "")
-    loaded_env_vars = dotenv_values(env_vars)
+    buff = io.StringIO(env_vars)
+    loaded_env_vars = dotenv_values(stream=buff)
     for k, v in loaded_env_vars.items():
         os.environ[k] = v
 
@@ -234,7 +236,6 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
         import site
         print("Loading preloaded env vars")
-        load_mlrpc_env_vars()
         app_dir = app_dir_mlflow_artifacts or self.local_app_dir
         # only add if it's not already there
         site.addsitedir(app_dir)
@@ -259,6 +260,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
     def load_context(self, context):
         from fastapi.testclient import TestClient
 
+        load_mlrpc_env_vars()
         code_path = None
         if context is not None:
             code_path = context.artifacts[self.code_key]
