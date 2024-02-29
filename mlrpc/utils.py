@@ -66,3 +66,16 @@ def get_profile_contents(profile_name, profile_path: str = "~/.databrickscfg") -
     host = config[profile_name]["host"]
     token = config[profile_name]["token"]
     return DatabricksProfile(name=profile_name, host=host, token=token)
+
+
+def get_version(package_name: str = "mlrpc") -> str:
+    try:
+        from importlib import metadata  # type: ignore
+    except ImportError:
+        # Python < 3.8
+        import importlib_metadata as metadata  # type: ignore
+
+    try:
+        return metadata.version(package_name)  # type: ignore
+    except metadata.PackageNotFoundError:  # type: ignore
+        return "unknown"

@@ -1,5 +1,6 @@
 import os
 import shutil
+from importlib.metadata import distributions
 from pathlib import Path
 from typing import Optional, List, Literal
 
@@ -35,19 +36,50 @@ def ensure_3_parts(name: str) -> bool:
     return len(name.split(".")) == 3
 
 
+class LibraryManager:
+
+    def __init__(self):
+        self._installed_libraries = {
+            i.metadata['name']: i.version for i in distributions()
+        }
+
+    def has_library(self, library_name) -> bool:
+        return library_name in self._installed_libraries
+
+    def get_library_version(self, library_name):
+        return self._installed_libraries.get(library_name)
+
+    def library_pinned_string(self, library_name):
+        return f"{library_name}=={self.get_library_version(library_name)}"
+
+
 def default_mlrpc_libs():
-    return ["mlflow==2.9.2",
-            "cloudpickle==2.0.0",
-            "mlflow-skinny==2.9.2",
-            "fastapi==0.110.0",
-            "pandas==1.5.3",
-            "databricks-sdk==0.20.0",
-            "httpx==0.27.0",
-            "pathspec==0.12.1",
-            "click",
-            "python-dotenv",
-            "uvicorn",
-            "mlrpc"]
+    lbm = LibraryManager()
+    libs = []
+    important_libs = ["cloudpickle", "mlflow-skinny", "fastapi", "pandas", "httpx"]
+    mlrpc_req = "mlrpc"
+    mlflow_req = "mlflow"
+    if lbm.has_library(mlrpc_req) is False or len(lbm.get_library_version(mlrpc_req).split(".")) > 3:
+        libs.append("mlrpc")
+    else:
+        libs.append(lbm.library_pinned_string(mlrpc_req))
+
+    if lbm.has_library(mlflow_req) is False:
+        if lbm.has_library("mlflow-skinny") is True:
+            libs.append(lbm.library_pinned_string("mlflow-skinny"))
+            libs.append(lbm.library_pinned_string("mlflow-skinny").replace("mlflow-skinny", "mlflow"))
+        else:
+            libs.append("mlflow")
+    else:
+        libs.append(lbm.library_pinned_string(mlflow_req))
+
+    for lib in important_libs:
+        if lbm.has_library(lib) is False:
+            libs.append(lib)
+        else:
+            libs.append(lbm.library_pinned_string(lib))
+
+    return libs
 
 
 def ensure_mlflow_installation(pip_reqs: List[str]):

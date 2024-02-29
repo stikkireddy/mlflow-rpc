@@ -8,8 +8,10 @@ properly without you having to know about custom python models.
 
 ## Installation
 
+Use the cli to install the package
+
 ```bash
-pip install mlrpc
+pip install mlrpc[cli]
 ```
 
 ## Instructions

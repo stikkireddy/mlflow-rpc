@@ -11,10 +11,10 @@ from databricks.sdk import WorkspaceClient
 
 from mlrpc.cfg import ConfigFileProcessor, INIT_CONFIG
 from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_only_last_n_versions, \
-    deploy_secret_env_file, deploy_serving_endpoint
+    deploy_secret_env_file, deploy_serving_endpoint, default_mlrpc_libs
 from mlrpc.proxy import make_swagger_proxy
 from mlrpc.flavor import FastAPIFlavor, pack_env_file_into_preload
-from mlrpc.utils import execute, find_next_open_port, get_profile_contents, DatabricksProfile
+from mlrpc.utils import execute, find_next_open_port, get_profile_contents, DatabricksProfile, get_version
 
 
 @click.group()
@@ -79,6 +79,19 @@ def ensure_databrickscfg_exists():
 
 def make_full_uc_path(catalog: str, schema: str, name: str):
     return f"{catalog}.{schema}.{name}"
+
+
+@cli.command()
+def version():
+    """
+    Print the version of the package
+    """
+    version = get_version()
+    click.echo(f"Version: {version}\n")
+
+    click.echo("Listing mlrpc default versions:")
+    for idx, lib in enumerate(default_mlrpc_libs()):
+        click.echo(f"  {idx + 1}. {lib}")
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
