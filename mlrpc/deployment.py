@@ -1,17 +1,18 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 import mlflow
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedEntityInput
+from databricks.sdk.service.catalog import ModelVersionInfo
+from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedEntityInput, EndpointStateReady
 from mlflow.entities import Experiment
 from mlflow.entities.model_registry import ModelVersion
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
 
-from mlrpc.flavor import FastAPIFlavor
+from mlrpc.flavor import FastAPIFlavor, MLRPC_ENV_VARS_PRELOAD_KEY
 
 
 def get_home_directory(ws_client: WorkspaceClient) -> Path:
@@ -45,6 +46,7 @@ def default_mlrpc_libs():
             "pathspec==0.12.1",
             "click",
             "python-dotenv",
+            "uvicorn",
             "mlrpc"]
 
 
@@ -59,6 +61,7 @@ def ensure_mlflow_installation(pip_reqs: List[str]):
             raise ValueError("mlflow-skinny==<version> must be present in pip_requirements")
         pip_reqs.append(mlflow_pip_install)
     return pip_reqs
+
 
 def build_proper_requirements(file_path: Path) -> List[str]:
     req_libs = ensure_mlflow_installation(default_mlrpc_libs())
@@ -75,6 +78,7 @@ def build_proper_requirements(file_path: Path) -> List[str]:
         lines = [line.strip() for line in lines if not line.startswith('#') and line.strip() != '']
         requirements = [str(req) for req in parse_requirements(lines) if req.name not in prebuilt_reqs]
         return req_libs + requirements
+
 
 def save_model(
         ws_client: WorkspaceClient,
@@ -162,8 +166,60 @@ def copy_files(src, dest, ignore_file=None):
                 shutil.copy(file_path, dest_file_path)
 
 
-def deploy_serving_endpoint(ws_client: WorkspaceClient, endpoint_name: str, uc_model_path: str,
-                            model_version: ModelVersion):
+def deploy_secret_env_file(ws_client: WorkspaceClient, secret_scope: str, secret_key: str, env_file: Path):
+    if env_file.exists() is False:
+        return
+    with open(env_file, 'r') as file:
+        string_value = file.read()
+        ws_client.secrets.put_secret(secret_scope, secret_key, string_value=string_value)
+
+
+def _check_deployable(ws_client: WorkspaceClient, endpoint_name: str) -> Literal["DEPLOY", "UPDATE", "NOT_UPDATABLE"]:
+    try:
+        endpoint = ws_client.serving_endpoints.get(endpoint_name)
+        # return endpoint.state.ready == EndpointStateReady.READY
+        if endpoint.state.ready == EndpointStateReady.READY:
+            return "UPDATE"
+        return "NOT_UPDATABLE"
+    except Exception:
+        return "DEPLOY"
+
+
+def deploy_serving_endpoint(ws_client: WorkspaceClient,
+                            endpoint_name: str,
+                            uc_model_path: str,
+                            model_version: ModelVersion | ModelVersionInfo,
+                            secret_scope: Optional[str] = None,
+                            secret_key: Optional[str] = None,
+                            size: Literal["Small", "Medium", "Large"] = "Small",
+                            scale_to_zero_enabled: bool = True,
+                            ):
+    if _check_deployable(ws_client, endpoint_name) == "NOT_UPDATABLE":
+        raise ValueError(f"Endpoint {endpoint_name} is not ready state to be updated")
+
+    if size not in ["Small", "Medium", "Large"]:
+        raise ValueError(f"Size must be one of 'Small', 'Medium', 'Large' but got {size}")
+
+    env_vars = None
+    if secret_scope is not None and secret_key is not None:
+        env_vars = {
+            MLRPC_ENV_VARS_PRELOAD_KEY: "{{" + f"secrets/{secret_scope}/{secret_key}" + "}}"
+        }
+
+    if _check_deployable(ws_client, endpoint_name) == "UPDATE":
+        return ws_client.serving_endpoints.update_config_and_wait(
+            name=endpoint_name,
+            served_entities=[
+                ServedEntityInput(
+                    entity_version=model_version.version,
+                    entity_name=uc_model_path,
+                    workload_size=size,
+                    scale_to_zero_enabled=scale_to_zero_enabled,
+                    environment_vars=env_vars
+                )
+            ],
+        )
+
     return ws_client.serving_endpoints.create_and_wait(
         name=endpoint_name,
         config=EndpointCoreConfigInput(
@@ -172,8 +228,9 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient, endpoint_name: str, uc_m
                 ServedEntityInput(
                     entity_version=model_version.version,
                     entity_name=uc_model_path,
-                    workload_size="Small",
-                    scale_to_zero_enabled=True,
+                    workload_size=size,
+                    scale_to_zero_enabled=scale_to_zero_enabled,
+                    environment_vars=env_vars
                 )
             ],
         )

@@ -33,12 +33,7 @@ def execute(*, cmd: List[str], env, cwd=None, ensure_python_site_packages=True, 
                 stdout_line = stdout_line.strip()
             yield stdout_line
 
-    # if popen.stderr is not None:
-    #     for stderr_line in iter(popen.stderr.readline, ""):  # Iterate over stderr
-    #         yield stderr_line
-
     popen.stdout.close()
-    # popen.stderr.close()  # Close stderr
     return_code = popen.wait()
     if return_code:
         raise subprocess.CalledProcessError(return_code, cmd)
@@ -54,11 +49,13 @@ def find_next_open_port(start_port: int = 6000, end_port: int = 7000) -> int:
                 continue
     raise Exception(f"No open ports found in the range {start_port}-{end_port}")
 
+
 @dataclass
 class DatabricksProfile:
     name: str
     host: str
     token: str
+
 
 def get_profile_contents(profile_name, profile_path: str = "~/.databrickscfg") -> DatabricksProfile:
     from configparser import ConfigParser

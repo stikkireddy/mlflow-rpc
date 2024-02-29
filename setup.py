@@ -24,6 +24,7 @@ setup(
                       "click",
                       "click-configfile",
                       "python-dotenv",
+                      "uvicorn",
                       "virtualenv"],
     setup_requires=["setuptools_scm"],
     use_scm_version=True,

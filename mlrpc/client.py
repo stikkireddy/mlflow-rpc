@@ -160,6 +160,7 @@ class MLFlowURIDispatchHandler(DispatchHandler):
         )
             for response in responses]
 
+
 class LocalServingDispatchHandler(DispatchHandler):
 
     def __init__(self, host: str = "0.0.0.0", port: int = 5000, endpoint: str = "/invocations"):
@@ -181,7 +182,7 @@ class LocalServingDispatchHandler(DispatchHandler):
             status_code=decoded_resp.status_code,
             headers=decoded_resp.headers,
             body=decoded_resp.content)
-        for decoded_resp in resp_objs]
+            for decoded_resp in resp_objs]
 
 
 class ServingEndpointDispatchHandler(DispatchHandler):
@@ -222,16 +223,15 @@ class LocalServingRPCClient(MLRPCClient):
         super().__init__(LocalServingDispatchHandler(host, port, endpoint))
 
 
-class Client:
+class _Client:
 
     @staticmethod
     def local(host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations") -> LocalServingRPCClient:
         return LocalServingRPCClient(host, port, endpoint)
 
     @staticmethod
-    def mlflow(uri: str) -> MLFlowRPCClient:
-        return MLFlowRPCClient(uri)
-
-    @staticmethod
     def databricks(endpoint_name: str, ws_client: WorkspaceClient = None) -> ServingRPCClient:
         return ServingRPCClient(endpoint_name, ws_client)
+
+
+rpc = _Client()

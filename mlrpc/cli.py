@@ -6,17 +6,22 @@ from typing import Dict, Optional
 from urllib.parse import urlparse
 
 import click
+import uvicorn
 from databricks.sdk import WorkspaceClient
-from dotenv import dotenv_values
 
-from mlrpc.cfg import ConfigFileProcessor
-from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_only_last_n_versions
+from mlrpc.cfg import ConfigFileProcessor, INIT_CONFIG
+from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_only_last_n_versions, \
+    deploy_secret_env_file, deploy_serving_endpoint
+from mlrpc.dev.proxy import make_swagger_proxy
 from mlrpc.flavor import FastAPIFlavor, pack_env_file_into_preload
 from mlrpc.utils import execute, find_next_open_port, get_profile_contents, DatabricksProfile
 
 
 @click.group()
 def cli():
+    """
+    A CLI for deploying services to databricks model serving
+    """
     pass
 
 
@@ -71,14 +76,26 @@ def ensure_databrickscfg_exists():
     if not Path("~/.databrickscfg").expanduser().exists():
         raise click.ClickException("No databrickscfg file found in ~/.databrickscfg. Please make a profile")
 
+
+def make_full_uc_path(catalog: str, schema: str, name: str):
+    return f"{catalog}.{schema}.{name}"
+
+
 @cli.command(context_settings=CONTEXT_SETTINGS)
-@click.option("-c", "--catalog", "uc_catalog", type=str)
-@click.option("-s", "--schema", "uc_schema", type=str)
-@click.option("-n", "--name", "name", type=str)
-@click.option("-a", "--alias", "latest_alias_name", type=str)
-@click.option("-r", "--run-name", "run_name", type=str)
-@click.option("-p", "--profile", "databricks_profile", type=str, default="DEFAULT")
-@click.option("-e", "--env-file", "envfile", type=click.Path(exists=True, resolve_path=True, file_okay=True), default=None)
+@click.option("-c", "--catalog", "uc_catalog", type=str,
+              help="The unity catalog name of the model")
+@click.option("-s", "--schema", "uc_schema", type=str,
+              help="The unity schema name of the model")
+@click.option("-n", "--name", "name", type=str,
+              help="The name of the app you want to deploy")
+@click.option("-a", "--alias", "latest_alias_name", type=str,
+              help="The alias name of the model that will be deployed")
+@click.option("-r", "--run-name", "run_name", type=str,
+              help="The name of the run to deploy")
+@click.option("-p", "--profile", "databricks_profile", type=str, default="DEFAULT",
+              help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
+@click.option("-e", "--env-file", "envfile", type=click.Path(exists=True, resolve_path=True, file_okay=True),
+              default=None, help="The location of the env file to deploy")
 @click.pass_context
 def local(
         ctx,
@@ -90,6 +107,9 @@ def local(
         databricks_profile: str,
         envfile: str
 ):
+    """
+    Serve a model locally from remote databricks model registry
+    """
     ensure_run_or_uc(run_name, uc_catalog, uc_schema, name, latest_alias_name)
     ensure_databrickscfg_exists()
     profile = get_profile_contents(databricks_profile)
@@ -100,7 +120,7 @@ def local(
     # TODO: this is a hack with some weird boto3 bug if you try to directly access the model version
     if envfile is not None:
         pack_env_file_into_preload(Path(envfile), env_copy)
-    uc_name = f"{uc_catalog}.{uc_schema}.{name}"
+    uc_name = make_full_uc_path(uc_catalog, uc_schema, name)
     alias = latest_alias_name
     v = ws.model_versions.get_by_alias(uc_name, alias)
     host = get_only_host(profile.host)
@@ -120,19 +140,32 @@ def local(
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
-@click.option("-c", "--catalog", "uc_catalog", type=str)
-@click.option("-s", "--schema", "uc_schema", type=str)
-@click.option("--app-root-dir", "app_root_dir", type=click.Path(exists=True, file_okay=False, dir_okay=True))
-@click.option("--app-path-in-root-dir", "app_path_in_root", type=str)
-@click.option("--app-object", "app_obj", type=str)
-@click.option("-n", "--name", "name", type=str)
-@click.option("-a", "--alias", "latest_alias_name", type=str)
-@click.option("--make-experiment", "make_experiment", type=bool, default=True)
-@click.option("--experiment-name", "experiment_name", type=str, default=None)
-@click.option("-r", "--register-model", "register_model", type=bool, default=True)
-@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default="default")
-@click.option("-e", "--env", "env", type=str, default=None)
-@click.option("--only-last-n-versions", "only_last_n_versions", type=int, default=None)
+@click.option("-c", "--catalog", "uc_catalog", type=str,
+              help="The unity catalog name of the model")
+@click.option("-s", "--schema", "uc_schema", type=str,
+              help="The unity schema name of the model")
+@click.option("--app-root-dir", "app_root_dir", type=click.Path(exists=True, file_okay=False, dir_okay=True),
+              help="The root directory of the app")
+@click.option("--app-path-in-root-dir", "app_path_in_root", type=str,
+              help="The path to the app in the root directory")
+@click.option("--app-object", "app_obj", type=str,
+              help="The name of the app object in the app file")
+@click.option("-n", "--name", "name", type=str,
+              help="The name of the app you want to deploy")
+@click.option("-a", "--alias", "latest_alias_name", type=str,
+              help="The alias name of the model that will be deployed")
+@click.option("--make-experiment", "make_experiment", type=bool, default=True,
+              help="Whether to create a new experiment")
+@click.option("--experiment-name", "experiment_name", type=str, default=None,
+              help="The name of the experiment to create")
+@click.option("-r", "--register-model", "register_model", type=bool, default=True,
+              help="Whether to register the model")
+@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default="default",
+              help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
+@click.option("-e", "--env", "env", type=str, default=None,
+              help="The environment to deploy the api to")
+@click.option("--only-last-n-versions", "only_last_n_versions", type=int, default=None,
+              help="The number of versions to keep")
 @click.pass_context
 def deploy(ctx, *,
            uc_catalog: str,
@@ -147,8 +180,11 @@ def deploy(ctx, *,
            register_model: bool,
            databricks_profile: str,
            only_last_n_versions: int,
-           env: str
+           env: str,
            ):
+    """
+    Deploy a model to databricks model registry
+    """
     ensure_databrickscfg_exists()
     if databricks_profile is not None:
         profile = get_profile_contents(databricks_profile)
@@ -158,7 +194,7 @@ def deploy(ctx, *,
         host = get_only_host(os.environ["DATABRICKS_HOST"])
 
     ws = WorkspaceClient(profile=databricks_profile)
-    uc_name = f"{uc_catalog}.{uc_schema}.{name}"
+    uc_name = make_full_uc_path(uc_catalog, uc_schema, name)
     generated_experiment_name = f"{uc_catalog}_{uc_schema}_{name}"
     model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
                           local_app_path_in_dir=app_path_in_root,
@@ -190,3 +226,114 @@ def deploy(ctx, *,
                 keep_only_last_n_versions(ws, uc_name, only_last_n_versions)
     else:
         click.echo(click.style("Skipping model registration", fg="yellow"))
+
+
+@cli.command(context_settings=CONTEXT_SETTINGS)
+@click.option("-c", "--catalog", "uc_catalog", type=str,
+              help="The unity catalog name of the model")
+@click.option("-s", "--schema", "uc_schema", type=str,
+              help="The unity schema name of the model")
+@click.option("-n", "--name", "name", type=str,
+              help="The name of the app you want to deploy")
+@click.option("-a", "--alias", "latest_alias_name", type=str,
+              help="The alias name of the model that will be deployed")
+@click.option("-e", "--env", "env", type=str, default=None)
+@click.option("--endpoint-name", "endpoint_name", type=str,
+              help="The name of the endpoint to deploy")
+@click.option("--secret-scope", "secret_scope", type=str, default=None,
+              help="The secret scope to deploy the env file to")
+@click.option("--secret-key", "secret_key", type=str, default=None,
+              help="The secret key to deploy the env file to")
+@click.option("--env-file", "env_file", type=click.Path(exists=True, resolve_path=True, file_okay=True),
+              default=None, help="The location of the env file to deploy")
+@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default="default",
+              help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
+@click.option("--size", "size", type=str, default="Small",
+              help="The size of the instance to deploy the endpoint to")
+@click.option("--scale-to-zero-enabled", "scale_to_zero_enabled", type=bool, default=True,
+              help="Whether to enable scale to zero for the endpoint")
+@click.pass_context
+def serve(ctx, *,
+          uc_catalog: str,
+          uc_schema: str,
+          name: str,
+          latest_alias_name: str,
+          env: str,
+          endpoint_name: str,
+          databricks_profile: str,
+          secret_scope: str,
+          secret_key: str,
+          env_file: str,
+          size: str,
+          scale_to_zero_enabled: bool
+          ):
+    """
+    Deploy a serving endpoint to databricks model serving
+    """
+    ws = WorkspaceClient(profile=databricks_profile)
+    uc_name = make_full_uc_path(uc_catalog, uc_schema, name)
+    click.echo(click.style(
+        f"Deploying serving endpoint: {endpoint_name} for model: {uc_name} with version: {latest_alias_name}",
+        fg="green"))
+    if env_file is not None:
+        click.echo(
+            click.style(f"Deploying secret env file to secret scope: {secret_scope} and key: {secret_key}", fg="green"))
+        if secret_scope is None or secret_key is None:
+            raise click.ClickException("Both secret scope and key must be provided to deploy env file")
+        deploy_secret_env_file(ws_client=ws,
+                               secret_scope=secret_scope,
+                               secret_key=secret_key,
+                               env_file=Path(env_file))
+
+    version = ws.model_versions.get_by_alias(uc_name, latest_alias_name)
+
+    if endpoint_name is None:
+        raise click.ClickException("Endpoint name must be provided")
+
+    deploy_serving_endpoint(ws_client=ws,
+                            endpoint_name=endpoint_name,
+                            uc_model_path=uc_name,
+                            model_version=version,
+                            scale_to_zero_enabled=scale_to_zero_enabled,
+                            secret_key=secret_key,
+                            secret_scope=secret_scope,
+                            size=size)
+
+
+@cli.command(context_settings=CONTEXT_SETTINGS)
+@click.option("--endpoint-name", "endpoint_name",
+              help="The name of the databricks endpoint to explore",
+              type=str)
+@click.option("-p", "--databricks-profile", "databricks_profile",
+              help="The databricks profile to use. This is the section name in ~/.databrickscfg file.",
+              type=str,
+              default="default")
+@click.option("-d", "--debug", "debug", is_flag=True, default=False)
+@click.pass_context
+def swagger(
+        ctx,
+        endpoint_name: str,
+        databricks_profile: str,
+        debug
+):
+    """
+    Explore a databricks endpoint using a swagger UI
+    """
+    open_port = find_next_open_port(8000, 9000)
+    app = make_swagger_proxy(endpoint_name, profile=databricks_profile, port=open_port, debug=debug)
+    click.echo(click.style(f"Swagger UI available at: http://0.0.0.0:{open_port}/docs", fg="green"))
+    uvicorn.run(app, host="0.0.0.0", port=open_port)
+
+
+@cli.command()
+def init():
+    """
+    Create a default config file
+    """
+    valid_cfgs = ConfigFileProcessor.config_files
+    paths = [Path(cfg) for cfg in valid_cfgs]
+    if any([p.exists() for p in paths]):
+        raise click.ClickException(f"Config file already exists. {paths}")
+    click.echo("Initializing mlrpc")
+    Path("mlrpc.cfg").write_text(INIT_CONFIG)
+    click.echo("Config file created at mlrpc.cfg")

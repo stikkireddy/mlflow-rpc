@@ -105,11 +105,19 @@ class ResponseObject:
 
     @classmethod
     def from_httpx_resp(cls, resp: httpx.Response):
-        return cls(
-            status_code=resp.status_code,
-            headers=list(resp.headers.items()),
-            content=resp.json()
-        )
+        # TODO: being lazy here, should handle more gracefully using mimetype
+        try:
+            return cls(
+                status_code=resp.status_code,
+                headers=list(resp.headers.items()),
+                content=resp.json()
+            )
+        except Exception as e:
+            return cls(
+                status_code=resp.status_code,
+                headers=list(resp.headers.items()),
+                content=resp.text
+            )
 
     @classmethod
     def from_mlflow_predict(cls, input: pd.DataFrame) -> List['ResponseObject']:
@@ -203,6 +211,7 @@ class RequestObject:
 
 MLRPC_ENV_VARS_PRELOAD_KEY = "MLRPC_ENV_VARS_PRELOAD"
 
+
 def load_mlrpc_env_vars() -> None:
     env_vars = os.getenv(MLRPC_ENV_VARS_PRELOAD_KEY, "")
     buff = io.StringIO(env_vars)
@@ -210,12 +219,14 @@ def load_mlrpc_env_vars() -> None:
     for k, v in loaded_env_vars.items():
         os.environ[k] = v
 
+
 def pack_env_file_into_preload(envfile: Path, env_dict: Dict[str, str] = None):
     env_dict = env_dict or os.environ
     if envfile.exists() is True:
         with envfile.open("r") as f:
             env_vars = f.read()
         env_dict[MLRPC_ENV_VARS_PRELOAD_KEY] = env_vars
+
 
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
