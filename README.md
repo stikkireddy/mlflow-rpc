@@ -11,7 +11,7 @@ properly without you having to know about custom python models.
 Use the cli to install the package
 
 ```bash
-pip install mlrpc[cli]
+pip install -U 'mlrpc[cli]'
 ```
 
 ## Instructions
