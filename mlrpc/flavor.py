@@ -382,6 +382,8 @@ class HotReloadEventDispatcher:
                 content="Checksum validation failed"
             )
         base64_to_dir(content, self._code_path)
+        # reload after files get moved
+        self.reload_app()
         return ResponseObject(
             status_code=200,
             content="SUCCESS"
