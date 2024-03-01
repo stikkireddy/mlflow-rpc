@@ -48,6 +48,8 @@ def serve_mlflow_model_cmd(model_uri: str, port: int):
         "0.0.0.0",
         "-m",
         model_uri,
+        "-w",  # mimic production
+        "4",
         "-p",
         str(port),
     ]

@@ -31,6 +31,8 @@ def hot_reload_on_change(dir_to_watch, rpc_client: MLRPCClient, frequency_second
     error_logging_function = error_logging_function or print
     event_queue: queue.Queue[FileSystemEvent] = queue.Queue()
 
+    logging_function("Attempting to start hot reload...")
+
     class FileChangeHandler(FileSystemEventHandler):
         def on_any_event(self, event: FileSystemEvent):
             event_queue.put(event)
@@ -62,10 +64,14 @@ def hot_reload_on_change(dir_to_watch, rpc_client: MLRPCClient, frequency_second
                 ignore_specs = get_gitignore_specs(dir_to_watch)
                 valid_changes = []
                 for change in any_changes:
+                    # if ignore specs is there and doesnt match its valid file
                     if ignore_specs is not None and not ignore_specs.match_file(change.src_path) \
                             and change.is_directory is False and change.src_path.endswith("~") is False:
                         valid_changes.append(change)
-
+                    # if ignore specs is not there, all changes are valid
+                    if ignore_specs is None:
+                        valid_changes.append(change)
+                logging_function(f"Found changes: {len(any_changes)} - Valid changes: {len(valid_changes)}")
                 if not valid_changes:
                     continue
 

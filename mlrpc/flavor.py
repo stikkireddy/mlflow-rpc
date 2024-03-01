@@ -3,8 +3,10 @@ import hashlib
 import io
 import json
 import os
+import random
 import shutil
 import tarfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence, Tuple, Optional, List, Dict
@@ -141,8 +143,8 @@ class ResponseObject:
             )
 
     @classmethod
-    def from_mlflow_predict(cls, input: pd.DataFrame) -> List['ResponseObject']:
-        response_objs_enc = [ResponseObjectEncoded(**row) for row in input.to_dict(orient='records')]
+    def from_mlflow_predict(cls, _input: pd.DataFrame) -> List['ResponseObject']:
+        response_objs_enc = [ResponseObjectEncoded(**row) for row in _input.to_dict(orient='records')]
         return [cls.from_resp_enc(enc) for enc in response_objs_enc]
 
 
@@ -249,6 +251,31 @@ def pack_env_file_into_preload(envfile: Path, env_dict: Dict[str, str] = None):
         env_dict[MLRPC_ENV_VARS_PRELOAD_KEY] = env_vars
 
 
+def copy_files(src: Path, dest: Path, check_dest_empty: bool = True):
+    # copying due to not wanting requirements for pathspec
+    src_dir = str(src)
+    dest_dir = str(dest)
+
+    if dest.exists() and any(dest.iterdir()) and check_dest_empty is True:
+        print("Destination directory is not empty. Skipping file copy.")
+        return
+
+    # clean the destination directory
+    if dest.exists():
+        shutil.rmtree(dest)
+
+    for root, dirs, files in os.walk(src_dir):
+        for directory in dirs:
+            dest_subdir = dest_dir / Path(root).relative_to(src_dir) / directory
+            dest_subdir.mkdir(parents=True, exist_ok=True)
+
+        for file in files:
+            file_path = str(os.path.join(root, file))
+            dest_file_path = str(dest_dir / Path(root).relative_to(src_dir) / file)
+            print("Copying", file_path, "to", dest_file_path, flush=True)
+            shutil.copy(file_path, dest_file_path)
+
+
 class HotReloadEvents:
 
     @staticmethod
@@ -308,7 +335,8 @@ class HotReloadEventDispatcher:
         self._file_in_code_path = file_in_code_path
         self._app_proxy = app_proxy
         self._code_path = code_path
-        self.validate()
+        # create temp dir to store the code
+        # self.validate()
 
     def validate(self):
         print(
@@ -328,7 +356,7 @@ class HotReloadEventDispatcher:
         valid_events = [f"{self.PATH_PREFIX}/{event}" for event in self.VALID_EVENTS]
         return normalized_req_path in valid_events
 
-    def _reload_app(self):
+    def reload_app(self):
         import site
         import importlib
         site.addsitedir(self._code_path)
@@ -345,7 +373,7 @@ class HotReloadEventDispatcher:
         return content_hash == checksum
 
     def _do_full_sync(self, request: RequestObject):
-        self._reload_app()
+        self.reload_app()
         payload = json.loads(request.content)
         content = payload['content']
         checksum = payload['checksum']
@@ -400,6 +428,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         app_dir = app_dir_mlflow_artifacts or self.local_app_dir
         # only add if it's not already there
         site.addsitedir(app_dir)
+        print("Loading code from path", app_dir, flush=True)
         app_module = __import__(self.app_path_in_dir.replace('.py', '').replace('/', '.'), fromlist=[self.app_obj])
         print(f"Loaded module successfully for {self.app_path_in_dir} from {app_dir}", flush=True)
         app_obj = getattr(app_module, self.app_obj)
@@ -424,20 +453,41 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         if context is not None:
             code_path = context.artifacts[self.code_key]
 
-        if self._app_proxy is None:
-            self._app_proxy = AppClientProxy(None)
+        self._app_proxy = AppClientProxy(None)
         # add the app_path to the pythonpath to load modules
         # only if it's not already there
         # update site packages to include this app dir
-        self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=code_path))
 
-        if os.getenv("MLRPC_HOT_RELOAD", str(self._reloadable)).lower() == "true":
+        def boot_app():
+            Path(temp_code_dir).mkdir(parents=True, exist_ok=True)
+            print("Hot reload dir being created at /tmp/mlrpc-hot-reload", flush=True)
+
+            copy_files(Path(code_path), Path(temp_code_dir), check_dest_empty=True)
             self._hot_reload_dispatcher = HotReloadEventDispatcher(
                 self._app_proxy,
-                code_path,
+                temp_code_dir,
                 self.app_path_in_dir,
                 self.app_obj
             )
+            self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=temp_code_dir))
+
+        if os.getenv("MLRPC_HOT_RELOAD", str(self._reloadable)).lower() == "true":
+            temp_code_dir = "/tmp/mlrpc-hot-reload"
+            attempts = 5
+            while True:
+                try:
+                    boot_app()
+                    break
+                except Exception as e:
+                    print(f"Error occurred while booting app: {e}", flush=True)
+                    attempts -= 1
+                    wait_time = random.uniform(1, 5)
+                    time.sleep(wait_time)
+                    if attempts == 0:
+                        raise
+                    print(f"Retrying in 5 seconds", flush=True)
+        else:
+            self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=code_path))
 
     def predict(self, context, model_input: pd.DataFrame, params=None):
         if self._app_proxy is None:
@@ -456,6 +506,9 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
                 if event_resp is not None:
                     return event_resp.encode().to_df()
+
+            if self._hot_reload_dispatcher is not None:
+                self._hot_reload_dispatcher.reload_app()
 
             for req in requests:
                 resp = self._app_proxy.client.request(
