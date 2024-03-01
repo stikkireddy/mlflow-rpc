@@ -5,6 +5,9 @@ from subprocess import CalledProcessError
 from typing import Dict, Optional
 from urllib.parse import urlparse
 
+import threading
+import time
+import webbrowser
 import click
 import uvicorn
 from databricks.sdk import WorkspaceClient
@@ -109,6 +112,10 @@ def version():
               help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
 @click.option("-e", "--env-file", "envfile", type=click.Path(exists=True, resolve_path=True, file_okay=True),
               default=None, help="The location of the env file to deploy")
+@click.option("-h", "--headless", "headless", is_flag=True, default=False,
+              help="Run local swagger server without opening browser")
+@click.option("--no-swagger", "no_swagger", is_flag=True, default=False,
+              help="Do not run swagger")
 @click.pass_context
 def local(
         ctx,
@@ -118,7 +125,9 @@ def local(
         run_name: str,
         latest_alias_name: str,
         databricks_profile: str,
-        envfile: str
+        envfile: str,
+        headless: bool,
+        no_swagger: bool,
 ):
     """
     Serve a model locally from remote databricks model registry
@@ -128,7 +137,8 @@ def local(
     profile = get_profile_contents(databricks_profile)
     env_copy = os.environ.copy()
     env_copy = configure_mlflow_to_databricks(env_copy, profile)
-    port = find_next_open_port()
+    proxy_server_port = find_next_open_port(6500, 7000)
+    mlflow_server_port = find_next_open_port(8000, 9000)
     ws = WorkspaceClient(profile=databricks_profile)
     # TODO: this is a hack with some weird boto3 bug if you try to directly access the model version
     if envfile is not None:
@@ -139,17 +149,37 @@ def local(
     host = get_only_host(profile.host)
     click.echo(click.style(f"Model URL: {get_catalog_url(host, uc_name, str(v.version))}", fg="green"))
     click.echo("\n")
+
+    def start_swagger():
+        app = make_swagger_proxy("",
+                                 profile=databricks_profile,
+                                 port=proxy_server_port,
+                                 databricks_mode=False,
+                                 local_server_port=mlflow_server_port)
+        swagger_thread = swagger_in_thread(app, proxy_server_port, headless=headless)
+        click.echo(click.style(f"Swagger UI available at: http://0.0.0.0:{proxy_server_port}/docs", fg="green"))
+        return swagger_thread
+
+    swagger_thread = None
     try:
         for log in execute(
                 cmd=serve_mlflow_model_cmd(
                     # "models:/srituc.models.demo_app@current"
                     f"runs:/{v.run_id}/model"
-                    , port),
+                    , mlflow_server_port),
                 env=env_copy,
         ):
-            click.echo(log)
+            if "[INFO] Listening at:" in log and no_swagger is False:
+                click.clear()
+                click.echo(log)
+                swagger_thread = start_swagger()
+            else:
+                click.echo(log)
     except CalledProcessError as e:
         raise click.ClickException("Error serving model")
+
+    if swagger_thread is not None:
+        swagger_thread.join()
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
@@ -322,20 +352,26 @@ def serve(ctx, *,
               type=str,
               default="default")
 @click.option("-d", "--debug", "debug", is_flag=True, default=False)
+@click.option("-h", "--headless", "headless", is_flag=True, default=False,
+              help="Run local swagger server without opening browser")
 @click.pass_context
 def swagger(
         ctx,
         endpoint_name: str,
         databricks_profile: str,
-        debug
+        debug: bool,
+        headless: bool
 ):
     """
     Explore a databricks endpoint using a swagger UI
     """
     open_port = find_next_open_port(8000, 9000)
     app = make_swagger_proxy(endpoint_name, profile=databricks_profile, port=open_port, debug=debug)
+    click.clear()
     click.echo(click.style(f"Swagger UI available at: http://0.0.0.0:{open_port}/docs", fg="green"))
-    uvicorn.run(app, host="0.0.0.0", port=open_port)
+    click.echo("\n\n")
+    thread = swagger_in_thread(app, open_port, headless=headless)
+    thread.join()
 
 
 @cli.command()
@@ -350,3 +386,15 @@ def init():
     click.echo("Initializing mlrpc")
     Path("mlrpc.cfg").write_text(INIT_CONFIG)
     click.echo("Config file created at mlrpc.cfg")
+
+
+def swagger_in_thread(app, port: int, host: str = "0.0.0.0", headless: bool = False) -> threading.Thread:
+    def run_server():
+        uvicorn.run(app, host=host, port=port)
+
+    server_thread = threading.Thread(target=run_server)
+    server_thread.start()
+    if headless is False:
+        time.sleep(0.5)
+        webbrowser.open(f"http://{host}:{port}/docs")
+    return server_thread

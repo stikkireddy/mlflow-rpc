@@ -39,7 +39,7 @@ def execute(*, cmd: List[str], env, cwd=None, ensure_python_site_packages=True, 
         raise subprocess.CalledProcessError(return_code, cmd)
 
 
-def find_next_open_port(start_port: int = 6000, end_port: int = 7000) -> int:
+def find_next_open_port(start_port: int = 6500, end_port: int = 7000) -> int:
     for port in range(start_port, end_port + 1):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             try:

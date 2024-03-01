@@ -21,7 +21,7 @@ setup(
         "cli": [
             "pathspec",
             "mlflow-skinny[databricks]",
-            "scipy",
+            "scipy", # only required to deploy model due to infer schema for inferring matrices
             "fastapi",
             "pandas",
             "httpx",
@@ -30,7 +30,8 @@ setup(
             "click-configfile",
             "python-dotenv",
             "uvicorn",
-            "virtualenv"
+            "virtualenv",
+            "flask" # only required for testing mlflow locally
         ],
     },
     use_scm_version=True,

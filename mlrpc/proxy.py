@@ -10,7 +10,9 @@ def make_swagger_proxy(
         endpoint_name: str,
         profile: str = "default",
         port: int = 8000,
-        debug: bool = False
+        debug: bool = False,
+        databricks_mode: bool = True,
+        local_server_port: int = 6500
 ):
     class RawRequestMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
@@ -18,8 +20,6 @@ def make_swagger_proxy(
             raw_request = await request.body()
 
             from mlrpc.client import rpc
-
-            os.environ["DATABRICKS_CONFIG_PROFILE"] = profile
 
             def get_just_path(request: Request):
                 return str(request.url).replace(str(request.base_url), "/")
@@ -31,9 +31,18 @@ def make_swagger_proxy(
                     title="MLRPC Swagger UI",
                 )
 
-            mlrpc_response = rpc \
-                .databricks(endpoint_name) \
-                .request(str(request.method), path, headers=request.headers, data=raw_request.decode("utf-8"))
+            if databricks_mode is True:
+                os.environ["DATABRICKS_CONFIG_PROFILE"] = profile
+                rpc_flavor = rpc.databricks(endpoint_name)
+                mlrpc_response = rpc_flavor \
+                    .request(str(request.method), path, headers=request.headers, data=raw_request.decode("utf-8"))
+            else:
+                rpc_flavor = rpc.local(port=local_server_port)
+                mlrpc_response = rpc_flavor \
+                    .request(str(request.method), path, headers=[(k, v) for k, v in request.headers.items()],
+                             data=raw_request.decode("utf-8"))
+
+
             headers = {k: v for d in mlrpc_response.headers for k, v in d.items() if k.lower() != "content-length"}
             if debug is True:
                 print("MLRPC RESPONSE: ", mlrpc_response)
