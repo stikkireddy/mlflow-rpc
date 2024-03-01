@@ -14,6 +14,7 @@ from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
 
 from mlrpc.flavor import FastAPIFlavor, MLRPC_ENV_VARS_PRELOAD_KEY
+from mlrpc.utils import get_version
 
 
 def get_home_directory(ws_client: WorkspaceClient) -> Path:
@@ -121,6 +122,7 @@ def save_model(
         dest_path: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         latest_alias_name: Optional[str] = "current",
+        reload: bool = False,
 ) -> ModelVersion:
     if not ensure_3_parts(uc_model_path):
         raise ValueError \
@@ -145,8 +147,15 @@ def save_model(
             artifacts={app.code_key: str(dest)},
             pip_requirements=requirements
         )
+        mlflow.set_tag("mlrpc_version", get_version("mlrpc"))
+        mlflow.set_tag("reloadable", 'true' if reload else 'false')
 
-    mv = mlflow.register_model(f"runs:/{run.info.run_id}/model", uc_model_path)
+    mv = mlflow.register_model(f"runs:/{run.info.run_id}/model",
+                               uc_model_path,
+                               tags={
+                                   "mlrpc_version": get_version("mlrpc"),
+                                   "reloadable": 'true' if reload else 'false'
+                               })
     for alias in aliases:
         ws_client.registered_models.set_alias(
             full_name=uc_model_path,
@@ -225,7 +234,6 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                             secret_key: Optional[str] = None,
                             size: Literal["Small", "Medium", "Large"] = "Small",
                             scale_to_zero_enabled: bool = True,
-                            hot_reload_enabled: bool = False
                             ):
     if _check_deployable(ws_client, endpoint_name) == "NOT_UPDATABLE":
         raise ValueError(f"Endpoint {endpoint_name} is not ready state to be updated")
@@ -238,10 +246,6 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
         env_vars = {
             MLRPC_ENV_VARS_PRELOAD_KEY: "{{" + f"secrets/{secret_scope}/{secret_key}" + "}}"
         }
-
-    if hot_reload_enabled is True:
-        env_vars = env_vars or {}
-        env_vars["MLRPC_HOT_RELOAD"] = "true"
 
     if _check_deployable(ws_client, endpoint_name) == "UPDATE":
         return ws_client.serving_endpoints.update_config_and_wait(

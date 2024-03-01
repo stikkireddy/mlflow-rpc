@@ -179,7 +179,8 @@ def local(
                 hot_reload_on_change(Path.cwd(), rpc.local(port=mlflow_server_port),
                                      logging_function=lambda x: click.echo(click.style(x, fg="yellow")),
                                      error_logging_function=lambda x: click.echo(click.style(x, fg="red", bold=True)),
-                                     success_logging_function=lambda x: click.echo(click.style(x, fg="green", bold=True)))
+                                     success_logging_function=lambda x: click.echo(
+                                         click.style(x, fg="green", bold=True)))
                 count += 1
             else:
                 click.echo(log)
@@ -217,6 +218,8 @@ def local(
               help="The environment to deploy the api to")
 @click.option("--only-last-n-versions", "only_last_n_versions", type=int, default=None,
               help="The number of versions to keep")
+@click.option("--reload", "reload", is_flag=True, default=None,
+              help="Whether to enable hot reload for the endpoint")
 @click.pass_context
 def deploy(ctx, *,
            uc_catalog: str,
@@ -232,6 +235,7 @@ def deploy(ctx, *,
            databricks_profile: str,
            only_last_n_versions: int,
            env: str,
+           reload: bool
            ):
     """
     Deploy a model to databricks model registry
@@ -249,7 +253,7 @@ def deploy(ctx, *,
     generated_experiment_name = f"{uc_catalog}_{uc_schema}_{name}"
     model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
                           local_app_path_in_dir=app_path_in_root,
-                          app_obj=app_obj)
+                          app_obj=app_obj, reloadable=reload)
     if make_experiment is True:
         created_experiment_name = generated_experiment_name if experiment_name is None else experiment_name
         exp = get_or_create_mlflow_experiment(ws, created_experiment_name)
@@ -269,7 +273,8 @@ def deploy(ctx, *,
                                        app=model,
                                        uc_model_path=uc_name,
                                        dest_path=str(temp_dir),
-                                       aliases=[latest_alias_name])
+                                       aliases=[latest_alias_name],
+                                       reload=reload)
             click.echo(
                 click.style(f"Model URL: {get_catalog_url(host, uc_name, str(model_version.version))}", fg="green"))
             if only_last_n_versions is not None and only_last_n_versions > 1:
@@ -303,8 +308,6 @@ def deploy(ctx, *,
               help="The size of the instance to deploy the endpoint to")
 @click.option("--scale-to-zero-enabled", "scale_to_zero_enabled", type=bool, default=True,
               help="Whether to enable scale to zero for the endpoint")
-@click.option("--reload", "reload", is_flag=True, default=False,
-              help="Whether to enable hot reload for the endpoint")
 @click.pass_context
 def serve(ctx, *,
           uc_catalog: str,
@@ -319,7 +322,6 @@ def serve(ctx, *,
           env_file: str,
           size: str,
           scale_to_zero_enabled: bool,
-          reload: bool
           ):
     """
     Deploy a serving endpoint to databricks model serving
@@ -351,7 +353,6 @@ def serve(ctx, *,
                             scale_to_zero_enabled=scale_to_zero_enabled,
                             secret_key=secret_key,
                             secret_scope=secret_scope,
-                            hot_reload_enabled=reload,
                             size=size)
 
 

@@ -380,7 +380,9 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                  local_app_dir_abs: Optional[str],
                  local_app_path_in_dir: Optional[str] = "app.py",
                  app_obj: Optional[str] = "app",
-                 artifact_code_key="code"):
+                 artifact_code_key="code",
+                 reloadable: Optional[bool] = False):
+        self._reloadable = reloadable
         self.local_app_dir = local_app_dir_abs
         self.code_key = artifact_code_key
         self.local_app_dir = self.local_app_dir.rstrip("/")
@@ -426,7 +428,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         # update site packages to include this app dir
         self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=code_path))
 
-        if os.getenv("MLRPC_HOT_RELOAD", "false").lower() == "true":
+        if os.getenv("MLRPC_HOT_RELOAD", str(self._reloadable)).lower() == "true":
             self._hot_reload_dispatcher = HotReloadEventDispatcher(
                 self._app_proxy,
                 code_path,
