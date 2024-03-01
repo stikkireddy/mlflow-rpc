@@ -300,7 +300,10 @@ class HotReloadEventDispatcher:
     PATH_PREFIX = "__INTERNAL__"
     VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL"]
 
-    def __init__(self, app_proxy: AppClientProxy, code_path: str, file_in_code_path: str, obj_name: str):
+    def __init__(self, app_proxy: AppClientProxy,
+                 code_path: str,
+                 file_in_code_path: str,
+                 obj_name: str):
         self._obj_name = obj_name
         self._file_in_code_path = file_in_code_path
         self._app_proxy = app_proxy
@@ -351,7 +354,7 @@ class HotReloadEventDispatcher:
                 status_code=400,
                 content="Checksum validation failed"
             )
-        base64_to_dir(content, "/Users/sri.tikkireddy/PycharmProjects/mlflow-rpc/tmp")
+        base64_to_dir(content, self._code_path)
         return ResponseObject(
             status_code=200,
             content="SUCCESS"

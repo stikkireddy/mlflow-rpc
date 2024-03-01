@@ -367,13 +367,16 @@ def serve(ctx, *,
 @click.option("-d", "--debug", "debug", is_flag=True, default=False)
 @click.option("-h", "--headless", "headless", is_flag=True, default=False,
               help="Run local swagger server without opening browser")
+@click.option("-r", "--reload", "reload", is_flag=True, default=False,
+              help="Reload remotely deployed endpoint")
 @click.pass_context
 def swagger(
         ctx,
         endpoint_name: str,
         databricks_profile: str,
         debug: bool,
-        headless: bool
+        headless: bool,
+        reload: bool
 ):
     """
     Explore a databricks endpoint using a swagger UI
@@ -384,7 +387,20 @@ def swagger(
     click.echo(click.style(f"Swagger UI available at: http://0.0.0.0:{open_port}/docs", fg="green"))
     click.echo("\n\n")
     thread = swagger_in_thread(app, open_port, headless=headless)
+    reload_threads = None
+    if reload is True:
+        reload_threads = hot_reload_on_change(Path.cwd(),
+                                              rpc.databricks(endpoint_name=endpoint_name,
+                                                             ws_client=WorkspaceClient(profile=databricks_profile)),
+                                              logging_function=lambda x: click.echo(x),
+                                              error_logging_function=lambda x: click.echo(
+                                                  click.style(x, fg="red", bold=True)),
+                                              success_logging_function=lambda x: click.echo(
+                                                  click.style(x, fg="green", bold=True)))
     thread.join()
+    if reload_threads is not None:
+        for t in reload_threads:
+            t.join()
 
 
 @cli.command()
