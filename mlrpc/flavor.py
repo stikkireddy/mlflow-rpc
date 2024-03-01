@@ -398,7 +398,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         # only add if it's not already there
         site.addsitedir(app_dir)
         app_module = __import__(self.app_path_in_dir.replace('.py', '').replace('/', '.'), fromlist=[self.app_obj])
-        print(f"Loaded module successfully for {self.app_path_in_dir} from {self.local_app_dir}", flush=True)
+        print(f"Loaded module successfully for {self.app_path_in_dir} from {app_dir}", flush=True)
         app_obj = getattr(app_module, self.app_obj)
         print(f"Loaded app object successfully for {self.app_obj}", flush=True)
         return app_obj
