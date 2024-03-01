@@ -390,10 +390,13 @@ def swagger(
     click.echo("\n\n")
     thread = swagger_in_thread(app, open_port, headless=headless)
     reload_threads = None
+    rpc_client = rpc.databricks(endpoint_name=endpoint_name, ws_client=WorkspaceClient(profile=databricks_profile))
+    pwd = Path.cwd()
+    click.echo(click.style(f"Doing full sync of: {str(pwd)}", fg="green"))
+    rpc_client.hot_reload(str(pwd))
     if reload is True:
         reload_threads = hot_reload_on_change(Path.cwd(),
-                                              rpc.databricks(endpoint_name=endpoint_name,
-                                                             ws_client=WorkspaceClient(profile=databricks_profile)),
+                                              rpc_client=rpc_client,
                                               logging_function=lambda x: click.echo(x),
                                               error_logging_function=lambda x: click.echo(
                                                   click.style(x, fg="red", bold=True)),

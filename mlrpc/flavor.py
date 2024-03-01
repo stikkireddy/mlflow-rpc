@@ -373,7 +373,6 @@ class HotReloadEventDispatcher:
         return content_hash == checksum
 
     def _do_full_sync(self, request: RequestObject):
-        self.reload_app()
         payload = json.loads(request.content)
         content = payload['content']
         checksum = payload['checksum']
