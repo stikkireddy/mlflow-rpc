@@ -225,6 +225,7 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                             secret_key: Optional[str] = None,
                             size: Literal["Small", "Medium", "Large"] = "Small",
                             scale_to_zero_enabled: bool = True,
+                            hot_reload_enabled: bool = False
                             ):
     if _check_deployable(ws_client, endpoint_name) == "NOT_UPDATABLE":
         raise ValueError(f"Endpoint {endpoint_name} is not ready state to be updated")
@@ -237,6 +238,10 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
         env_vars = {
             MLRPC_ENV_VARS_PRELOAD_KEY: "{{" + f"secrets/{secret_scope}/{secret_key}" + "}}"
         }
+
+    if hot_reload_enabled is True:
+        env_vars = env_vars or {}
+        env_vars["MLRPC_HOT_RELOAD"] = "true"
 
     if _check_deployable(ws_client, endpoint_name) == "UPDATE":
         return ws_client.serving_endpoints.update_config_and_wait(

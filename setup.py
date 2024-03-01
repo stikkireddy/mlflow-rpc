@@ -31,7 +31,8 @@ setup(
             "python-dotenv",
             "uvicorn",
             "virtualenv",
-            "flask" # only required for testing mlflow locally
+            "flask", # only required for testing mlflow locally
+            "watchdog"
         ],
     },
     use_scm_version=True,

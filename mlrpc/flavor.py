@@ -1,7 +1,10 @@
 import base64
+import hashlib
 import io
 import json
 import os
+import shutil
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence, Tuple, Optional, List, Dict
@@ -10,6 +13,7 @@ import httpx
 import mlflow
 import pandas as pd
 from dotenv import dotenv_values
+from starlette.testclient import TestClient
 
 
 def _b64encode(s: Optional[str]) -> Optional[str]:
@@ -39,6 +43,23 @@ def _decode_anything(s: Optional[str]) -> any:
         return None
     json_str = _b64decode(s)
     return json.loads(json_str)
+
+
+def base64_to_dir(base64_string, target_dir):
+    # Decode the base64 string back to bytes
+    base64_data = base64.b64decode(base64_string)
+
+    # Create a BytesIO object from these bytes
+    data = io.BytesIO(base64_data)
+
+    # Remove all files in the target directory
+    shutil.rmtree(target_dir)
+    os.makedirs(target_dir)
+
+    # Open the tarfile for reading from the binary stream
+    with tarfile.open(fileobj=data, mode='r:gz') as tar:
+        # Extract all files to the target directory
+        tar.extractall(path=target_dir)
 
 
 @dataclass
@@ -228,6 +249,130 @@ def pack_env_file_into_preload(envfile: Path, env_dict: Dict[str, str] = None):
         env_dict[MLRPC_ENV_VARS_PRELOAD_KEY] = env_vars
 
 
+class HotReloadEvents:
+
+    @staticmethod
+    def full_sync(content: str) -> RequestObject:
+        return RequestObject(
+            method="POST",
+            path="/__INTERNAL__/FULL_SYNC",
+            content=json.dumps({
+                "content": content,
+                "checksum": hashlib.md5(content.encode('utf-8')).hexdigest()
+            })
+        )
+
+    @staticmethod
+    def reload() -> RequestObject:
+        return RequestObject(
+            method="POST",
+            path="/__INTERNAL__/RELOAD"
+        )
+
+    @staticmethod
+    def reinstall() -> RequestObject:
+        return RequestObject(
+            method="POST",
+            path="/__INTERNAL__/REINSTALL"
+        )
+
+
+class AppClientProxy:
+
+    def __init__(self, app):
+        self._app = app
+        self._client = TestClient(app)
+
+    @property
+    def app(self):
+        return self._app
+
+    @property
+    def client(self):
+        return self._client
+
+    def update_app(self, app):
+        self._app = app
+        self._client = TestClient(app)
+
+
+class HotReloadEventDispatcher:
+    PATH_PREFIX = "__INTERNAL__"
+    VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL"]
+
+    def __init__(self, app_proxy: AppClientProxy, code_path: str, file_in_code_path: str, obj_name: str):
+        self._obj_name = obj_name
+        self._file_in_code_path = file_in_code_path
+        self._app_proxy = app_proxy
+        self._code_path = code_path
+        self.validate()
+
+    def validate(self):
+        print(
+            f"Validating hot reload dispatcher with {self._app_proxy.app} {self._code_path} {self._file_in_code_path} {self._obj_name}",
+            flush=True)
+        if not self._app_proxy.app:
+            raise ValueError("app_proxy must be set")
+        if not self._code_path:
+            raise ValueError("code_path must be set")
+        if not self._file_in_code_path:
+            raise ValueError("file_in_code_path must be set")
+        if not self._obj_name:
+            raise ValueError("obj_name must be set")
+
+    def _is_valid_event(self, path: str) -> bool:
+        normalized_req_path = path.lstrip("/").rstrip("/")
+        valid_events = [f"{self.PATH_PREFIX}/{event}" for event in self.VALID_EVENTS]
+        return normalized_req_path in valid_events
+
+    def _reload_app(self):
+        import site
+        import importlib
+        site.addsitedir(self._code_path)
+        app_module = __import__(self._file_in_code_path.replace('.py', '').replace('/', '.'),
+                                fromlist=[self._obj_name])
+        importlib.reload(app_module)
+        app_obj = getattr(app_module, self._obj_name)
+        self._app_proxy.update_app(app_obj)
+        print("Reloaded App!", flush=True)
+
+    def _validate_checksum(self, content: str, checksum: str) -> bool:
+        content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+        print("Valid checksum", flush=True)
+        return content_hash == checksum
+
+    def _do_full_sync(self, request: RequestObject):
+        self._reload_app()
+        payload = json.loads(request.content)
+        content = payload['content']
+        checksum = payload['checksum']
+        if self._validate_checksum(content, checksum) is False:
+            return ResponseObject(
+                status_code=400,
+                content="Checksum validation failed"
+            )
+        base64_to_dir(content, "/Users/sri.tikkireddy/PycharmProjects/mlflow-rpc/tmp")
+        return ResponseObject(
+            status_code=200,
+            content="SUCCESS"
+        )
+
+    def dispatch(self, request: RequestObject) -> Optional[ResponseObject]:
+        if request.method != "POST":
+            return None
+
+        if self._is_valid_event(request.path) is False:
+            return None
+
+        if request.path == f"/{self.PATH_PREFIX}/FULL_SYNC":
+            print("Dispatching full sync event", flush=True)
+            self._do_full_sync(request)
+            return ResponseObject(
+                status_code=200,
+                content="SUCCESS"
+            )
+
+
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
     def __init__(self,
@@ -241,19 +386,19 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         self.local_app_dir = self.local_app_dir.rstrip("/")
         self.app_path_in_dir = local_app_path_in_dir
         self.app_obj = app_obj
-        self._app = None
-        self._client = None
+        self._app_proxy = None
+        self._hot_reload_dispatcher: Optional[HotReloadEventDispatcher] = None
 
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
         import site
-        print("Loading preloaded env vars")
+        print("Loading preloaded env vars", flush=True)
         app_dir = app_dir_mlflow_artifacts or self.local_app_dir
         # only add if it's not already there
         site.addsitedir(app_dir)
         app_module = __import__(self.app_path_in_dir.replace('.py', '').replace('/', '.'), fromlist=[self.app_obj])
-        print(f"Loaded module successfully for {self.app_path_in_dir} from {self.local_app_dir}")
+        print(f"Loaded module successfully for {self.app_path_in_dir} from {self.local_app_dir}", flush=True)
         app_obj = getattr(app_module, self.app_obj)
-        print(f"Loaded app object successfully for {self.app_obj}")
+        print(f"Loaded app object successfully for {self.app_obj}", flush=True)
         return app_obj
 
     def validate(self):
@@ -269,35 +414,60 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             raise ValueError(f"Failed to load app module: {e} in {self.local_app_dir}/{self.app_path_in_dir}")
 
     def load_context(self, context):
-        from fastapi.testclient import TestClient
-
         load_mlrpc_env_vars()
-        code_path = None
+        code_path = self.local_app_dir
         if context is not None:
             code_path = context.artifacts[self.code_key]
+
+        if self._app_proxy is None:
+            self._app_proxy = AppClientProxy(None)
         # add the app_path to the pythonpath to load modules
         # only if it's not already there
         # update site packages to include this app dir
-        self._app = self.load_module(app_dir_mlflow_artifacts=code_path)
-        self._client = TestClient(self._app)
+        self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=code_path))
+
+        if os.getenv("MLRPC_HOT_RELOAD", "false").lower() == "true":
+            self._hot_reload_dispatcher = HotReloadEventDispatcher(
+                self._app_proxy,
+                code_path,
+                self.app_path_in_dir,
+                self.app_obj
+            )
 
     def predict(self, context, model_input: pd.DataFrame, params=None):
-        if self._app is None:
+        if self._app_proxy is None:
+            self._app_proxy = AppClientProxy(None)
+
+        if self._app_proxy.app is None or self._app_proxy.client is None:
             self.load_context(context)
 
         requests = RequestObject.from_encoded_df(model_input)
         responses = []
-        for req in requests:
-            resp = self._client.request(
-                method=req.method,
-                url=req.path,
-                headers=req.headers,
-                params=req.query_params,
-                data=req.content,
-                timeout=req.timeout
-            )
-            responses.append(ResponseObject.from_httpx_resp(resp).encode())
-        return pd.DataFrame([resp.dict() for resp in responses])
+
+        try:
+            # happy path things can go wrong :-)
+            if self._hot_reload_dispatcher is not None and len(requests) == 1:
+                print("Checking for hot reload events", flush=True)
+                event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
+                if event_resp is not None:
+                    return event_resp.encode().to_df()
+
+            for req in requests:
+                resp = self._app_proxy.client.request(
+                    method=req.method,
+                    url=req.path,
+                    headers=req.headers,
+                    params=req.query_params,
+                    data=req.content,
+                    timeout=req.timeout
+                )
+                responses.append(ResponseObject.from_httpx_resp(resp).encode())
+            return pd.DataFrame([resp.dict() for resp in responses])
+        except Exception as e:
+            return ResponseObject(
+                status_code=500,
+                content=f"Error occurred: {str(e)}"
+            ).encode().to_df()
 
     def signature(self):
         from mlflow.models import infer_signature

@@ -1,13 +1,15 @@
 import abc
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence, Tuple, Literal, Dict, Union, List, Optional, Any
 from urllib.parse import urlencode
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import DataframeSplitInput
 
-from mlrpc.flavor import RequestObject, ResponseObject
+from mlrpc.flavor import RequestObject, ResponseObject, HotReloadEvents
+from mlrpc.utils import dir_to_base64
 
 MethodType = Literal['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 QueryParams = Dict[str, Union[str, List[str]]]
@@ -56,7 +58,7 @@ class DispatchHandler(abc.ABC):
 
 class MLRPCClient:
     def __init__(self, rpc_dispatch_handler: DispatchHandler):
-        self._rpc_dispatch_handler = rpc_dispatch_handler
+        self._rpc_dispatch_handler: DispatchHandler = rpc_dispatch_handler
 
     def _dispatch(self,
                   *,
@@ -140,6 +142,12 @@ class MLRPCClient:
         return self._dispatch(method="DELETE",
                               path=url,
                               headers=headers)
+
+    def hot_reload(self, directory_path) -> List[MLRPCResponse] | MLRPCResponse:
+        reload_dir = Path(directory_path)
+        git_ignore = reload_dir / ".gitignore"
+        content = dir_to_base64(reload_dir, git_ignore)
+        return self._rpc_dispatch_handler.dispatch(HotReloadEvents.full_sync(content))
 
 
 class MLFlowURIDispatchHandler(DispatchHandler):

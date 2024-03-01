@@ -13,8 +13,10 @@ import uvicorn
 from databricks.sdk import WorkspaceClient
 
 from mlrpc.cfg import ConfigFileProcessor, INIT_CONFIG
+from mlrpc.client import rpc
 from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_only_last_n_versions, \
     deploy_secret_env_file, deploy_serving_endpoint, default_mlrpc_libs
+from mlrpc.hotreload import hot_reload_on_change
 from mlrpc.proxy import make_swagger_proxy
 from mlrpc.flavor import FastAPIFlavor, pack_env_file_into_preload
 from mlrpc.utils import execute, find_next_open_port, get_profile_contents, DatabricksProfile, get_version
@@ -47,7 +49,7 @@ def serve_mlflow_model_cmd(model_uri: str, port: int):
         "-m",
         model_uri,
         "-p",
-        str(port)
+        str(port),
     ]
 
 
@@ -161,6 +163,7 @@ def local(
         return swagger_thread
 
     swagger_thread = None
+    count = 0
     try:
         for log in execute(
                 cmd=serve_mlflow_model_cmd(
@@ -169,10 +172,15 @@ def local(
                     , mlflow_server_port),
                 env=env_copy,
         ):
-            if "[INFO] Listening at:" in log and no_swagger is False:
+            if "[INFO] Listening at:" in log and no_swagger is False and count == 0:
                 click.clear()
                 click.echo(log)
                 swagger_thread = start_swagger()
+                hot_reload_on_change(Path.cwd(), rpc.local(port=mlflow_server_port),
+                                     logging_function=lambda x: click.echo(click.style(x, fg="yellow")),
+                                     error_logging_function=lambda x: click.echo(click.style(x, fg="red", bold=True)),
+                                     success_logging_function=lambda x: click.echo(click.style(x, fg="green", bold=True)))
+                count += 1
             else:
                 click.echo(log)
     except CalledProcessError as e:
@@ -295,6 +303,8 @@ def deploy(ctx, *,
               help="The size of the instance to deploy the endpoint to")
 @click.option("--scale-to-zero-enabled", "scale_to_zero_enabled", type=bool, default=True,
               help="Whether to enable scale to zero for the endpoint")
+@click.option("--reload", "reload", is_flag=True, default=False,
+              help="Whether to enable hot reload for the endpoint")
 @click.pass_context
 def serve(ctx, *,
           uc_catalog: str,
@@ -308,7 +318,8 @@ def serve(ctx, *,
           secret_key: str,
           env_file: str,
           size: str,
-          scale_to_zero_enabled: bool
+          scale_to_zero_enabled: bool,
+          reload: bool
           ):
     """
     Deploy a serving endpoint to databricks model serving
@@ -340,6 +351,7 @@ def serve(ctx, *,
                             scale_to_zero_enabled=scale_to_zero_enabled,
                             secret_key=secret_key,
                             secret_scope=secret_scope,
+                            hot_reload_enabled=reload,
                             size=size)
 
 

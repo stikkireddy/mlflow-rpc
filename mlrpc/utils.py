@@ -1,6 +1,14 @@
+import base64
+import io
+import os
 import socket
+import tarfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
+
+from pathspec import PathSpec
+from pathspec.patterns import GitWildMatchPattern
 
 
 def ensure_python_path(env):
@@ -79,3 +87,37 @@ def get_version(package_name: str = "mlrpc") -> str:
         return metadata.version(package_name)  # type: ignore
     except metadata.PackageNotFoundError:  # type: ignore
         return "unknown"
+
+
+def dir_to_base64(tar_dir, ignore_file: Path = None):
+    # Create a BytesIO object
+    data = io.BytesIO()
+
+    spec = None
+    if ignore_file is not None and ignore_file.exists() and ignore_file.is_file():
+        ignore_file = str(ignore_file)
+        with open(ignore_file, 'r') as f:
+            gitignore = f.read()
+        spec = PathSpec.from_lines(GitWildMatchPattern, gitignore.splitlines())
+
+    # Open the tarfile for writing to the binary stream
+    with tarfile.open(fileobj=data, mode='w:gz') as tar:
+        # Iterate over all files in the directory
+        for root, dirs, files in os.walk(tar_dir):
+            for file in files:
+                # Check if the file is in the ignore list
+                file_path = str(os.path.join(root, file))
+                if spec is not None and spec.match_file(file_path) is True:
+                    continue
+                # Get the relative path of the file
+                rel_path = os.path.relpath(str(os.path.join(root, file)), tar_dir)
+                # Add file to the tarfile with its relative path
+                tar.add(str(os.path.join(root, file)), arcname=rel_path)
+
+    # Get the value of the binary stream and encode it to base64
+    base64_data = base64.b64encode(data.getvalue())
+
+    # Convert bytes to string
+    base64_string = base64_data.decode('utf-8')
+
+    return base64_string
