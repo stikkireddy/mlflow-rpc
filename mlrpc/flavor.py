@@ -164,17 +164,11 @@ class HotReloadEventHandler:
 
     @staticmethod
     def _install_packages(package_names: List[str]):
-        packages_normalized = []
-        for pkg in package_names:
-            if pkg.startswith("'") or pkg.startswith('"'):
-                packages_normalized.append(pkg)
-            else:
-                packages_normalized.append(f"'{pkg}'")
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", *packages_normalized])
-            return f"Packages {','.join(packages_normalized)} installed successfully"
+            subprocess.check_call([sys.executable, "-m", "pip", "install", *package_names])
+            return f"Packages {','.join(package_names)} installed successfully"
         except subprocess.CalledProcessError:
-            raise ValueError(f"Failed to install packages {','.join(packages_normalized)}")
+            raise ValueError(f"Failed to install packages {','.join(package_names)}")
 
     @staticmethod
     def _uninstall_package(package_name: str):

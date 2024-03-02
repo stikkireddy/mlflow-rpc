@@ -54,6 +54,7 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
             if isinstance(_response, list):
                 for r in _response:
                     handle_response(r, event_type)
+                return
 
             if response.status_code != 200:
                 error_logging_function(
