@@ -27,7 +27,6 @@ def get_gitignore_specs(dir_to_watch) -> Optional[PathSpec]:
 def maybe_requirements_txt_change(src_path: str, rpc_client: HotReloadMLRPCClient) -> Optional[MLRPCResponse]:
     if src_path.rstrip("~").endswith("requirements.txt"):
         requirements = get_requirements_from_file(Path(src_path))
-        print(requirements)
         if requirements:
             response = rpc_client.reinstall_requirements(requirements)
             return response
