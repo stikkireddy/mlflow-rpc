@@ -153,9 +153,7 @@ class HotReloadMLRPCClient(MLRPCClient):
         return self._rpc_dispatch_handler.dispatch(HotReloadEvents.full_sync(content))
 
     def reinstall_requirements(self, requirements: List[str]) -> MLRPCResponse:
-        return self._dispatch(method="POST",
-                              path="/__INTERNAL__/REINSTALL",
-                              data={"requirements": requirements})
+        return self._rpc_dispatch_handler.dispatch(HotReloadEvents.reinstall(requirements))
 
 
 class LocalServingDispatchHandler(DispatchHandler):

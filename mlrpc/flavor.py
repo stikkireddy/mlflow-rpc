@@ -163,7 +163,7 @@ class HotReloadEventHandler:
         )
 
     @staticmethod
-    def _install_package(package_names: List[str]):
+    def _install_packages(package_names: List[str]):
         packages_normalized = []
         for pkg in package_names:
             if pkg.startswith("'") or pkg.startswith('"'):
@@ -177,7 +177,7 @@ class HotReloadEventHandler:
             raise ValueError(f"Failed to install packages {','.join(packages_normalized)}")
 
     @staticmethod
-    def _uninstall_package(package_name):
+    def _uninstall_package(package_name: str):
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", package_name])
             return f"Package {package_name} uninstalled successfully"
@@ -187,7 +187,7 @@ class HotReloadEventHandler:
     def _do_install(self, request: RequestObject):
         payload = json.loads(request.content)
         requirements = payload['requirements']
-        install_message = [self._install_package(pkg) for pkg in requirements]
+        install_message = self._install_packages(requirements)
         return ResponseObject(
             status_code=200,
             content=json.dumps(install_message)

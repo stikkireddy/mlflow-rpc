@@ -2,7 +2,7 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Callable, Literal
+from typing import Optional, Callable, Literal, List
 
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
@@ -27,6 +27,7 @@ def get_gitignore_specs(dir_to_watch) -> Optional[PathSpec]:
 def maybe_requirements_txt_change(src_path: str, rpc_client: HotReloadMLRPCClient) -> Optional[MLRPCResponse]:
     if src_path.rstrip("~").endswith("requirements.txt"):
         requirements = get_requirements_from_file(Path(src_path))
+        print(requirements)
         if requirements:
             response = rpc_client.reinstall_requirements(requirements)
             return response
@@ -49,8 +50,12 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
     def consumer():
         logging_function(f"Starting file watcher for {dir_to_watch}...")
 
-        def handle_response(_response: MLRPCResponse,
+        def handle_response(_response: MLRPCResponse | List[MLRPCResponse],
                             event_type: Literal["hot-reload", "reinstall-pip-requirements"]):
+            if isinstance(_response, list):
+                for r in _response:
+                    handle_response(r, event_type)
+
             if response.status_code != 200:
                 error_logging_function(
                     f"Event: {event_type} failed with status: {_response.status_code} - {_response.body}")
