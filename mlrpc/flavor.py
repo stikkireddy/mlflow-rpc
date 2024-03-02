@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, List
 
 import mlflow
+from mlflow.models import infer_signature
 import pandas as pd
 from dotenv import dotenv_values
 from starlette.testclient import TestClient
@@ -314,7 +315,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 print("Checking for hot reload events", flush=True)
                 event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
                 if event_resp is not None:
-                    return response_to_df(event_resp.encode())
+                    return response_to_df(event_resp)
 
             if self._hot_reload_dispatcher is not None:
                 self._hot_reload_dispatcher.reload_app()
@@ -334,10 +335,9 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             return response_to_df(ResponseObject(
                 status_code=500,
                 content=f"Error occurred: {str(e)}"
-            ).encode())
+            ))
 
     def signature(self):
-        from mlflow.models import infer_signature
         full_request = request_to_df(RequestObject(
             method='GET',
             headers=[('Host', 'example.org')],
@@ -345,19 +345,19 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             query_params="",
             content="",
             timeout=10
-        ).encode())
+        ))
         optional_request = request_to_df(RequestObject(
             method='GET',
             path='/'
-        ).encode())
+        ))
         full_response = response_to_df(ResponseObject(
             status_code=200,
             headers=[('Content-Type', 'application/json')],
             content=""
-        ).encode())
+        ))
         optional_response = response_to_df(ResponseObject(
             status_code=200,
-        ).encode())
+        ))
         return infer_signature(
             model_input=pd.concat([full_request, optional_request]),
             model_output=pd.concat([full_response, optional_response])
