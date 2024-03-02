@@ -4,6 +4,8 @@ import json
 import os
 import random
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -17,15 +19,19 @@ from mlrpc.proto import base64_to_dir, ResponseObject, RequestObject, RequestObj
 
 MLRPC_ENV_VARS_PRELOAD_KEY = "MLRPC_ENV_VARS_PRELOAD"
 
+
 def request_to_df(request: RequestObject):
     return pd.DataFrame([request.encode().dict()])
+
 
 def response_to_df(response: ResponseObject):
     return pd.DataFrame([response.encode().dict()])
 
+
 def make_request_from_input_df(input_df: pd.DataFrame) -> List['RequestObject']:
     request_objs_enc = [RequestObjectEncoded(**row) for row in input_df.to_dict(orient='records')]
     return [RequestObject.from_request_enc(enc) for enc in request_objs_enc]
+
 
 def load_mlrpc_env_vars() -> None:
     env_vars = os.getenv(MLRPC_ENV_VARS_PRELOAD_KEY, "")
@@ -155,6 +161,37 @@ class HotReloadEventHandler:
             content="SUCCESS"
         )
 
+    @staticmethod
+    def _install_package(package_names: List[str]):
+        packages_normalized = []
+        for pkg in package_names:
+            if pkg.startswith("'") or pkg.startswith('"'):
+                packages_normalized.append(pkg)
+            else:
+                packages_normalized.append(f"'{pkg}'")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", *packages_normalized])
+            return f"Packages {','.join(packages_normalized)} installed successfully"
+        except subprocess.CalledProcessError:
+            raise ValueError(f"Failed to install packages {','.join(packages_normalized)}")
+
+    @staticmethod
+    def _uninstall_package(package_name):
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", package_name])
+            return f"Package {package_name} uninstalled successfully"
+        except subprocess.CalledProcessError:
+            f"Failed to uninstall package {package_name}"
+
+    def _do_install(self, request: RequestObject):
+        payload = json.loads(request.content)
+        requirements = payload['requirements']
+        install_message = [self._install_package(pkg) for pkg in requirements]
+        return ResponseObject(
+            status_code=200,
+            content=json.dumps(install_message)
+        )
+
     def dispatch(self, request: RequestObject) -> Optional[ResponseObject]:
         if request.method != "POST":
             return None
@@ -169,6 +206,10 @@ class HotReloadEventHandler:
                 status_code=200,
                 content="SUCCESS"
             )
+
+        if request.path == f"/{self.PATH_PREFIX}/REINSTALL":
+            print("Dispatching reinstall event", flush=True)
+            return self._do_install(request)
 
 
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
@@ -221,6 +262,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             code_path = context.artifacts[self.code_key]
 
         self._app_proxy = AppClientProxy(None)
+
         # add the app_path to the pythonpath to load modules
         # only if it's not already there
         # update site packages to include this app dir

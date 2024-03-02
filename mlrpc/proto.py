@@ -6,7 +6,7 @@ import os
 import shutil
 import tarfile
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple, Dict, Literal
+from typing import Optional, Sequence, Tuple, Dict, Literal, List
 
 
 def _b64encode(s: Optional[str]) -> Optional[str]:
@@ -207,6 +207,7 @@ class RequestObject:
         )
 
 
+# HOT RELOAD EVENTS ARE ALWAYS POSTS
 class HotReloadEvents:
 
     @staticmethod
@@ -228,8 +229,11 @@ class HotReloadEvents:
         )
 
     @staticmethod
-    def reinstall() -> RequestObject:
+    def reinstall(requirements: List[str]) -> RequestObject:
         return RequestObject(
             method="POST",
-            path="/__INTERNAL__/REINSTALL"
+            path="/__INTERNAL__/REINSTALL",
+            content=json.dumps({
+                "requirements": requirements
+            })
         )

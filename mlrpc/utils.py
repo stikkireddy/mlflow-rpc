@@ -2,6 +2,8 @@ import base64
 import io
 import os
 import socket
+import subprocess
+import sys
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +14,6 @@ from pathspec.patterns import GitWildMatchPattern
 
 
 def ensure_python_path(env):
-    import sys
-    from pathlib import Path
     for python_version_dir in (Path(sys.executable).parent.parent / "lib").iterdir():
         site_packages = str(python_version_dir / "site-packages")
         py_path = env.get("PYTHONPATH", "")
@@ -24,7 +24,6 @@ def ensure_python_path(env):
 def execute(*, cmd: List[str], env, cwd=None, ensure_python_site_packages=True, shell=False, trim_new_line=True):
     if ensure_python_site_packages:
         ensure_python_path(env)
-    import subprocess
     if shell is True:
         cmd = " ".join(cmd)
     popen = subprocess.Popen(cmd,
@@ -100,24 +99,33 @@ def dir_to_base64(tar_dir, ignore_file: Path = None):
             gitignore = f.read()
         spec = PathSpec.from_lines(GitWildMatchPattern, gitignore.splitlines())
 
-    # Open the tarfile for writing to the binary stream
     with tarfile.open(fileobj=data, mode='w:gz') as tar:
-        # Iterate over all files in the directory
         for root, dirs, files in os.walk(tar_dir):
             for file in files:
-                # Check if the file is in the ignore list
                 file_path = str(os.path.join(root, file))
+
                 if spec is not None and spec.match_file(file_path) is True:
                     continue
-                # Get the relative path of the file
+
                 rel_path = os.path.relpath(str(os.path.join(root, file)), tar_dir)
-                # Add file to the tarfile with its relative path
                 tar.add(str(os.path.join(root, file)), arcname=rel_path)
 
-    # Get the value of the binary stream and encode it to base64
     base64_data = base64.b64encode(data.getvalue())
 
-    # Convert bytes to string
     base64_string = base64_data.decode('utf-8')
 
     return base64_string
+
+
+def get_requirements_from_file(file_path: Path) -> List[str]:
+    if file_path.exists() is False:
+        return []
+
+    print("Found requirements.txt using this")
+    from pkg_resources import parse_requirements
+
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+        # Ignore comments and empty lines
+        lines = [line.strip() for line in lines if not line.startswith('#') and line.strip() != '']
+        return [str(req) for req in parse_requirements(lines)]

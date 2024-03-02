@@ -2,7 +2,7 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Literal
 
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
@@ -10,6 +10,7 @@ from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from watchdog.observers import Observer
 
 from mlrpc.client import MLRPCResponse, HotReloadMLRPCClient
+from mlrpc.utils import get_requirements_from_file
 
 
 def get_gitignore_specs(dir_to_watch) -> Optional[PathSpec]:
@@ -21,6 +22,14 @@ def get_gitignore_specs(dir_to_watch) -> Optional[PathSpec]:
         return PathSpec.from_lines(GitWildMatchPattern, gitignore.splitlines())
 
     return None
+
+
+def maybe_requirements_txt_change(src_path: str, rpc_client: HotReloadMLRPCClient) -> Optional[MLRPCResponse]:
+    if src_path.rstrip("~").endswith("requirements.txt"):
+        requirements = get_requirements_from_file(Path(src_path))
+        if requirements:
+            response = rpc_client.reinstall_requirements(requirements)
+            return response
 
 
 def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequency_seconds: int = 1,
@@ -40,12 +49,14 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
     def consumer():
         logging_function(f"Starting file watcher for {dir_to_watch}...")
 
-        def handle_response(_response: MLRPCResponse):
+        def handle_response(_response: MLRPCResponse,
+                            event_type: Literal["hot-reload", "reinstall-pip-requirements"]):
             if response.status_code != 200:
-                error_logging_function(f"Hot reload failed with status: {_response.status_code} - {_response.body}")
+                error_logging_function(
+                    f"Event: {event_type} failed with status: {_response.status_code} - {_response.body}")
                 return
 
-            success_logging_function(f"Hot reload status: {_response.status_code} - {_response.body}")
+            success_logging_function(f"Event: {event_type} status: {_response.status_code} - {_response.body}")
 
         while True:
             # Collect all changes made in the last 5 seconds
@@ -53,7 +64,6 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
             start_time = time.time()
             while time.time() - start_time < frequency_seconds:
                 try:
-                    # Try to get an event from the queue
                     event = event_queue.get(timeout=1)
                     any_changes.append(event)
                 except queue.Empty:
@@ -75,15 +85,20 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
                 if not valid_changes:
                     continue
 
+                for change in valid_changes:
+                    response = maybe_requirements_txt_change(change.src_path, rpc_client)
+                    if response is not None:
+                        handle_response(response, "reinstall-pip-requirements")
+
                 logging_function(f"Files changed firing hot reload for {dir_to_watch}...")
                 responses = rpc_client.hot_reload(dir_to_watch)
 
                 if responses is not None:
                     if isinstance(responses, list):
                         for response in responses:
-                            handle_response(response)
+                            handle_response(response, "hot-reload")
                     else:
-                        handle_response(responses)
+                        handle_response(responses, "hot-reload")
 
     consumer_thread = threading.Thread(target=consumer)
     consumer_thread.start()
