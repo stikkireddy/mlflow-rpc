@@ -9,7 +9,7 @@ from pathspec.patterns import GitWildMatchPattern
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from watchdog.observers import Observer
 
-from mlrpc.client import MLRPCClient, MLRPCResponse
+from mlrpc.client import MLRPCResponse, HotReloadMLRPCClient
 
 
 def get_gitignore_specs(dir_to_watch) -> Optional[PathSpec]:
@@ -23,7 +23,7 @@ def get_gitignore_specs(dir_to_watch) -> Optional[PathSpec]:
     return None
 
 
-def hot_reload_on_change(dir_to_watch, rpc_client: MLRPCClient, frequency_seconds: int = 1,
+def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequency_seconds: int = 1,
                          logging_function: Callable = None,
                          error_logging_function: Callable = None,
                          success_logging_function: Callable = None):

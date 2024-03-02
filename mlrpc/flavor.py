@@ -1,239 +1,31 @@
-import base64
 import hashlib
 import io
 import json
 import os
 import random
 import shutil
-import tarfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence, Tuple, Optional, List, Dict
+from typing import Optional, Dict, List
 
-import httpx
 import mlflow
 import pandas as pd
 from dotenv import dotenv_values
 from starlette.testclient import TestClient
 
-
-def _b64encode(s: Optional[str]) -> Optional[str]:
-    if s is None:
-        return None
-    return base64.b64encode(s.encode('utf-8')).decode('utf-8')
-
-
-def _b64decode(s: Optional[str]) -> Optional[str]:
-    if s is None:
-        return None
-    return base64.b64decode(s).decode('utf-8')
-
-
-def _encode_anything(s: any) -> Optional[str]:
-    if s is None:
-        return None
-    if isinstance(s, bytes):
-        s = s.decode('utf-8')
-
-    json_str = json.dumps(s)
-    return _b64encode(json_str)
-
-
-def _decode_anything(s: Optional[str]) -> any:
-    if s is None:
-        return None
-    json_str = _b64decode(s)
-    return json.loads(json_str)
-
-
-def base64_to_dir(base64_string, target_dir):
-    # Decode the base64 string back to bytes
-    base64_data = base64.b64decode(base64_string)
-
-    # Create a BytesIO object from these bytes
-    data = io.BytesIO(base64_data)
-
-    # Remove all files in the target directory
-    shutil.rmtree(target_dir)
-    os.makedirs(target_dir)
-
-    # Open the tarfile for reading from the binary stream
-    with tarfile.open(fileobj=data, mode='r:gz') as tar:
-        # Extract all files to the target directory
-        tar.extractall(path=target_dir)
-
-
-@dataclass
-class ResponseObjectEncoded:
-    status_code: int
-    headers: Optional[str] = None
-    content: Optional[str] = None
-
-    def dict(self):
-        return {
-            "status_code": self.status_code,
-            "headers": self.headers,
-            "content": self.content
-        }
-
-    def to_df(self) -> pd.DataFrame:
-        return pd.DataFrame([self.dict()])
-
-    def to_mlflow_df_split_dict(self):
-        return {
-            "dataframe_split": {
-                "columns": ["status_code", "headers", "content"],
-                "data": [[self.status_code, self.headers, self.content]],
-            }
-        }
-
-    def to_mlflow_df_split_json(self):
-        return json.dumps(self.to_mlflow_df_split_dict())
-
-
-@dataclass
-class ResponseObject:
-    status_code: int
-    headers: Optional[Sequence[Tuple[str, str]]] = None
-    content: Optional[str] = None
-
-    def encode(self):
-        headers = [{header[0]: header[1]} for header in self.headers] if self.headers is not None else None
-        return ResponseObjectEncoded(
-            status_code=self.status_code,
-            headers=_encode_anything(headers),
-            content=_encode_anything(self.content)
-        )
-
-    @classmethod
-    def from_resp_enc(cls, encoded: ResponseObjectEncoded):
-        status_code = encoded.status_code
-        headers = _decode_anything(encoded.headers) if encoded.headers is not None else []
-        headers = [(k, v) for header in headers for k, v in header.items()]
-        content = _decode_anything(encoded.content)
-        return cls(
-            status_code=status_code,
-            headers=headers,
-            content=content
-        )
-
-    @classmethod
-    def from_serving_resp(cls, resp: Dict[str, str | int]):
-        return cls(
-            status_code=resp['status_code'],
-            headers=_decode_anything(resp['headers']),
-            content=_decode_anything(resp['content'])
-        )
-
-    @classmethod
-    def from_httpx_resp(cls, resp: httpx.Response):
-        # TODO: being lazy here, should handle more gracefully using mimetype
-        try:
-            return cls(
-                status_code=resp.status_code,
-                headers=list(resp.headers.items()),
-                content=resp.json()
-            )
-        except Exception as e:
-            return cls(
-                status_code=resp.status_code,
-                headers=list(resp.headers.items()),
-                content=resp.text
-            )
-
-    @classmethod
-    def from_mlflow_predict(cls, _input: pd.DataFrame) -> List['ResponseObject']:
-        response_objs_enc = [ResponseObjectEncoded(**row) for row in _input.to_dict(orient='records')]
-        return [cls.from_resp_enc(enc) for enc in response_objs_enc]
-
-
-@dataclass
-class RequestObjectEncoded:
-    method: str
-    path: str
-    headers: Optional[str] = None
-    query_params: Optional[str] = None
-    content: Optional[str] = None
-    timeout: Optional[float] = None
-
-    def dict(self):
-        return {
-            "method": self.method,
-            "path": self.path,
-            "headers": self.headers,
-            "query_params": self.query_params,
-            "content": self.content,
-            "timeout": self.timeout
-        }
-
-    def to_df(self) -> pd.DataFrame:
-        return pd.DataFrame([self.dict()])
-
-    def to_mlflow_df_split_dict(self):
-        return {
-            "dataframe_split": {
-                "columns": ["method", "headers", "path", "query_params", "content", "timeout"],
-                "data": [[self.method, self.headers, self.path, self.query_params, self.content, self.timeout]],
-            }
-        }
-
-    def to_sdk_df_split(self):
-        return {
-            "columns": ["method", "headers", "path", "query_params", "content", "timeout"],
-            "data": [[self.method, self.headers, self.path, self.query_params, self.content, self.timeout]],
-        }
-
-    def to_mlflow_df_split_json(self):
-        return json.dumps(self.to_mlflow_df_split_dict())
-
-
-@dataclass
-class RequestObject:
-    method: Literal['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
-    path: str
-    headers: Optional[Sequence[Tuple[str, str]]] = None
-    query_params: Optional[str] = None  # todo make this a bit more typed in future
-    content: Optional[str] = None
-    timeout: Optional[float] = None
-
-    def encode(self):
-        headers = [{header[0]: header[1]} for header in self.headers] if self.headers is not None else None
-        return RequestObjectEncoded(
-            method=self.method,
-            headers=_encode_anything(headers),
-            path=self.path,
-            query_params=self.query_params,
-            content=_encode_anything(self.content),
-            timeout=self.timeout
-        )
-
-    @classmethod
-    def from_request_enc(cls, encoded: RequestObjectEncoded):
-        method: Literal['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] = encoded.method
-        headers = _decode_anything(encoded.headers) if encoded.headers is not None else []
-        headers = [(k, v) for header in headers for k, v in header.items()]
-        path = encoded.path
-        query_params = encoded.query_params
-        content = _decode_anything(encoded.content)
-        timeout = encoded.timeout
-        return cls(
-            method=method,
-            headers=headers,
-            path=path,
-            query_params=query_params,
-            content=content,
-            timeout=timeout
-        )
-
-    @classmethod
-    def from_encoded_df(cls, input: pd.DataFrame) -> List['RequestObject']:
-        request_objs_enc = [RequestObjectEncoded(**row) for row in input.to_dict(orient='records')]
-        return [cls.from_request_enc(enc) for enc in request_objs_enc]
-
+from mlrpc.proto import base64_to_dir, ResponseObject, RequestObject, RequestObjectEncoded
 
 MLRPC_ENV_VARS_PRELOAD_KEY = "MLRPC_ENV_VARS_PRELOAD"
 
+def request_to_df(request: RequestObject):
+    return pd.DataFrame([request.encode().dict()])
+
+def response_to_df(response: ResponseObject):
+    return pd.DataFrame([response.encode().dict()])
+
+def make_request_from_input_df(input_df: pd.DataFrame) -> List['RequestObject']:
+    request_objs_enc = [RequestObjectEncoded(**row) for row in input_df.to_dict(orient='records')]
+    return [RequestObject.from_request_enc(enc) for enc in request_objs_enc]
 
 def load_mlrpc_env_vars() -> None:
     env_vars = os.getenv(MLRPC_ENV_VARS_PRELOAD_KEY, "")
@@ -276,34 +68,6 @@ def copy_files(src: Path, dest: Path, check_dest_empty: bool = True):
             shutil.copy(file_path, dest_file_path)
 
 
-class HotReloadEvents:
-
-    @staticmethod
-    def full_sync(content: str) -> RequestObject:
-        return RequestObject(
-            method="POST",
-            path="/__INTERNAL__/FULL_SYNC",
-            content=json.dumps({
-                "content": content,
-                "checksum": hashlib.md5(content.encode('utf-8')).hexdigest()
-            })
-        )
-
-    @staticmethod
-    def reload() -> RequestObject:
-        return RequestObject(
-            method="POST",
-            path="/__INTERNAL__/RELOAD"
-        )
-
-    @staticmethod
-    def reinstall() -> RequestObject:
-        return RequestObject(
-            method="POST",
-            path="/__INTERNAL__/REINSTALL"
-        )
-
-
 class AppClientProxy:
 
     def __init__(self, app):
@@ -323,28 +87,30 @@ class AppClientProxy:
         self._client = TestClient(app)
 
 
-class HotReloadEventDispatcher:
+class HotReloadEventHandler:
     PATH_PREFIX = "__INTERNAL__"
-    VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL"]
+    VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL", "RESET"]
 
-    def __init__(self, app_proxy: AppClientProxy,
-                 code_path: str,
+    def __init__(self,
+                 *,
+                 app_client_proxy: AppClientProxy,
+                 reload_code_path: str,
                  file_in_code_path: str,
-                 obj_name: str):
+                 obj_name: str,
+                 reset_code_path: Optional[str] = None):
+        self._reset_code_path = reset_code_path
         self._obj_name = obj_name
         self._file_in_code_path = file_in_code_path
-        self._app_proxy = app_proxy
-        self._code_path = code_path
-        # create temp dir to store the code
-        # self.validate()
+        self._app_client_proxy = app_client_proxy
+        self._reload_code_path = reload_code_path
 
     def validate(self):
         print(
-            f"Validating hot reload dispatcher with {self._app_proxy.app} {self._code_path} {self._file_in_code_path} {self._obj_name}",
+            f"Validating hot reload dispatcher with {self._app_client_proxy.app} {self._reload_code_path} {self._file_in_code_path} {self._obj_name}",
             flush=True)
-        if not self._app_proxy.app:
+        if not self._app_client_proxy.app:
             raise ValueError("app_proxy must be set")
-        if not self._code_path:
+        if not self._reload_code_path:
             raise ValueError("code_path must be set")
         if not self._file_in_code_path:
             raise ValueError("file_in_code_path must be set")
@@ -359,12 +125,12 @@ class HotReloadEventDispatcher:
     def reload_app(self):
         import site
         import importlib
-        site.addsitedir(self._code_path)
+        site.addsitedir(self._reload_code_path)
         app_module = __import__(self._file_in_code_path.replace('.py', '').replace('/', '.'),
                                 fromlist=[self._obj_name])
         importlib.reload(app_module)
         app_obj = getattr(app_module, self._obj_name)
-        self._app_proxy.update_app(app_obj)
+        self._app_client_proxy.update_app(app_obj)
         print("Reloaded App!", flush=True)
 
     def _validate_checksum(self, content: str, checksum: str) -> bool:
@@ -381,7 +147,7 @@ class HotReloadEventDispatcher:
                 status_code=400,
                 content="Checksum validation failed"
             )
-        base64_to_dir(content, self._code_path)
+        base64_to_dir(content, self._reload_code_path)
         # reload after files get moved
         self.reload_app()
         return ResponseObject(
@@ -421,7 +187,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         self.app_path_in_dir = local_app_path_in_dir
         self.app_obj = app_obj
         self._app_proxy = None
-        self._hot_reload_dispatcher: Optional[HotReloadEventDispatcher] = None
+        self._hot_reload_dispatcher: Optional[HotReloadEventHandler] = None
 
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
         import site
@@ -464,11 +230,11 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             print("Hot reload dir being created at /tmp/mlrpc-hot-reload", flush=True)
 
             copy_files(Path(code_path), Path(temp_code_dir), check_dest_empty=True)
-            self._hot_reload_dispatcher = HotReloadEventDispatcher(
-                self._app_proxy,
-                temp_code_dir,
-                self.app_path_in_dir,
-                self.app_obj
+            self._hot_reload_dispatcher = HotReloadEventHandler(
+                app_client_proxy=self._app_proxy,
+                reload_code_path=temp_code_dir,
+                file_in_code_path=self.app_path_in_dir,
+                obj_name=self.app_obj
             )
             self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=temp_code_dir))
 
@@ -497,7 +263,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         if self._app_proxy.app is None or self._app_proxy.client is None:
             self.load_context(context)
 
-        requests = RequestObject.from_encoded_df(model_input)
+        requests = make_request_from_input_df(model_input)
         responses = []
 
         try:
@@ -506,7 +272,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 print("Checking for hot reload events", flush=True)
                 event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
                 if event_resp is not None:
-                    return event_resp.encode().to_df()
+                    return response_to_df(event_resp.encode())
 
             if self._hot_reload_dispatcher is not None:
                 self._hot_reload_dispatcher.reload_app()
@@ -523,33 +289,33 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 responses.append(ResponseObject.from_httpx_resp(resp).encode())
             return pd.DataFrame([resp.dict() for resp in responses])
         except Exception as e:
-            return ResponseObject(
+            return response_to_df(ResponseObject(
                 status_code=500,
                 content=f"Error occurred: {str(e)}"
-            ).encode().to_df()
+            ).encode())
 
     def signature(self):
         from mlflow.models import infer_signature
-        full_request = RequestObject(
+        full_request = request_to_df(RequestObject(
             method='GET',
             headers=[('Host', 'example.org')],
             path='/',
             query_params="",
             content="",
             timeout=10
-        ).encode().to_df()
-        optional_request = RequestObject(
+        ).encode())
+        optional_request = request_to_df(RequestObject(
             method='GET',
             path='/'
-        ).encode().to_df()
-        full_response = ResponseObject(
+        ).encode())
+        full_response = response_to_df(ResponseObject(
             status_code=200,
             headers=[('Content-Type', 'application/json')],
             content=""
-        ).encode().to_df()
-        optional_response = ResponseObject(
+        ).encode())
+        optional_response = response_to_df(ResponseObject(
             status_code=200,
-        ).encode().to_df()
+        ).encode())
         return infer_signature(
             model_input=pd.concat([full_request, optional_request]),
             model_output=pd.concat([full_response, optional_response])

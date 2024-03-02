@@ -2,14 +2,13 @@ import abc
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence, Tuple, Literal, Dict, Union, List, Optional, Any
+from typing import Sequence, Tuple, Literal, Dict, Union, List, Optional, Any, Type
 from urllib.parse import urlencode
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import DataframeSplitInput
 
-from mlrpc.flavor import RequestObject, ResponseObject, HotReloadEvents
-from mlrpc.utils import dir_to_base64
+from mlrpc.proto import ResponseObject, RequestObject, HotReloadEvents
 
 MethodType = Literal['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 QueryParams = Dict[str, Union[str, List[str]]]
@@ -143,30 +142,15 @@ class MLRPCClient:
                               path=url,
                               headers=headers)
 
+
+class HotReloadMLRPCClient(MLRPCClient):
+
     def hot_reload(self, directory_path) -> List[MLRPCResponse] | MLRPCResponse:
+        from mlrpc.utils import dir_to_base64
         reload_dir = Path(directory_path)
         git_ignore = reload_dir / ".gitignore"
         content = dir_to_base64(reload_dir, git_ignore)
         return self._rpc_dispatch_handler.dispatch(HotReloadEvents.full_sync(content))
-
-
-class MLFlowURIDispatchHandler(DispatchHandler):
-
-    def __init__(self, uri: str):
-        self._uri = uri
-
-    def dispatch(self, request: RequestObject) -> MLRPCResponse | List[MLRPCResponse]:
-        import mlflow
-        m = mlflow.pyfunc.load_model(self._uri)
-        resp = m.predict(request.encode().to_df())
-        responses = ResponseObject.from_mlflow_predict(resp)
-        return [MLRPCResponse(
-            request=request,
-            status_code=200,
-            headers=response.headers,
-            body=response.content
-        )
-            for response in responses]
 
 
 class LocalServingDispatchHandler(DispatchHandler):
@@ -177,7 +161,11 @@ class LocalServingDispatchHandler(DispatchHandler):
         self._endpoint = endpoint
 
     def dispatch(self, request: RequestObject) -> MLRPCResponse | List[MLRPCResponse]:
-        import httpx
+        try:
+            import httpx
+        except ImportError:
+            raise ImportError("httpx is required for LocalServingDispatchHandler; do pip install mlrpc[cli]")
+
         url = f"http://{self._host}:{self._port}{self._endpoint}"
 
         headers = request.headers or []
@@ -202,7 +190,7 @@ class ServingEndpointDispatchHandler(DispatchHandler):
         decoded_resp = [ResponseObject.from_serving_resp(pred) for pred in serving_resp.predictions]
         return [MLRPCResponse(
             request=request,
-            status_code=200,
+            status_code=response.status_code,
             headers=response.headers,
             body=response.content
         )
@@ -213,33 +201,51 @@ class ServingEndpointDispatchHandler(DispatchHandler):
         self._ws = ws_client or WorkspaceClient()
 
 
-class MLFlowRPCClient(MLRPCClient):
+class ServingRPCClient:
 
-    def __init__(self, uri: str):
-        super().__init__(MLFlowURIDispatchHandler(uri))
+    def __init__(self, endpoint_name: str, ws_client: WorkspaceClient = None,
+                 client_klass: Optional[Type[MLRPCClient] | Type[HotReloadMLRPCClient]] = None):
+        client_klass = client_klass or MLRPCClient
+        self._rpc_client = client_klass(ServingEndpointDispatchHandler(endpoint_name, ws_client))
+
+    @property
+    def rpc_client(self):
+        return self._rpc_client
 
 
-class ServingRPCClient(MLRPCClient):
+class LocalServingRPCClient:
 
-    def __init__(self, endpoint_name: str, ws_client: WorkspaceClient = None):
-        super().__init__(ServingEndpointDispatchHandler(endpoint_name, ws_client))
+    def __init__(self, host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations",
+                 client_klass: Optional[Type[MLRPCClient] | Type[HotReloadMLRPCClient]] = None):
+        client_klass = client_klass or MLRPCClient
+        self._rpc_client = client_klass(LocalServingDispatchHandler(host, port, endpoint))
 
-
-class LocalServingRPCClient(MLRPCClient):
-
-    def __init__(self, host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations"):
-        super().__init__(LocalServingDispatchHandler(host, port, endpoint))
+    @property
+    def rpc_client(self):
+        return self._rpc_client
 
 
 class _Client:
 
     @staticmethod
-    def local(host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations") -> LocalServingRPCClient:
-        return LocalServingRPCClient(host, port, endpoint)
+    def local(host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations") -> MLRPCClient:
+        return LocalServingRPCClient(host, port, endpoint).rpc_client
 
     @staticmethod
-    def databricks(endpoint_name: str, ws_client: WorkspaceClient = None) -> ServingRPCClient:
-        return ServingRPCClient(endpoint_name, ws_client)
+    def databricks(endpoint_name: str, ws_client: WorkspaceClient = None) -> MLRPCClient:
+        return ServingRPCClient(endpoint_name, ws_client).rpc_client
+
+
+class _HotReloadClient:
+
+    @staticmethod
+    def local(host: str = "0.0.0.0", port: int = 6000, endpoint: str = "/invocations") -> HotReloadMLRPCClient:
+        return LocalServingRPCClient(host, port, endpoint, HotReloadMLRPCClient).rpc_client
+
+    @staticmethod
+    def databricks(endpoint_name: str, ws_client: WorkspaceClient = None) -> HotReloadMLRPCClient:
+        return ServingRPCClient(endpoint_name, ws_client, HotReloadMLRPCClient).rpc_client
 
 
 rpc = _Client()
+hot_reload = _HotReloadClient()

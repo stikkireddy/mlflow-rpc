@@ -34,6 +34,9 @@ setup(
             "flask", # only required for testing mlflow locally
             "watchdog"
         ],
+        "client": [
+            "databricks-sdk",
+        ]
     },
     use_scm_version=True,
     classifiers=[
