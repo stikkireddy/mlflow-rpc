@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import io
 import json
@@ -191,10 +192,10 @@ class HotReloadEventHandler:
         self._file_in_code_path = file_in_code_path
         self._app_client_proxy = app_client_proxy
         self._reload_code_path = reload_code_path
-        self._key_generator = KeyGenerator(temp_code_dir)
+        self._key_generator = KeyGenerator(temp_code_dir,
+                                           debug_msg=functools.partial(debug_msg, msg_type="RSA_KEYGEN"))
         self._key_generator.generate()
-        self._encrypt_decrypt = EncryptDecrypt(private_key=self._key_generator.get_private_key(),
-                                               public_key=self._key_generator.get_public_key())
+        self._encrypt_decrypt = EncryptDecrypt(key_generator=self._key_generator)
         self._reload_indicator = ReloadIndicator()
         self._reload_thread = make_reload_thread(self._reload_indicator, self)
         self._reload_thread.start()

@@ -6,7 +6,7 @@ import os
 import shutil
 import tarfile
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple, Dict, Literal, List
+from typing import Optional, Sequence, Tuple, Dict, Literal, List, Callable
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -245,17 +245,20 @@ class HotReloadEvents:
 
 
 class KeyGenerator:
-    def __init__(self, directory):
+    def __init__(self, directory, debug_msg: Optional[Callable] = None):
         self.directory = directory
         self.private_key = None
         self.public_key = None
+        self._debug_msg = debug_msg or print
+        self._public_key_name = 'public_key.pem'
+        self._private_key_name = 'private_key.pem'
 
     def generate(self):
-        private_key_path = os.path.join(self.directory, 'private_key.pem')
-        public_key_path = os.path.join(self.directory, 'public_key.pem')
+        private_key_path = os.path.join(self.directory, self._private_key_name)
+        public_key_path = os.path.join(self.directory, self._public_key_name)
 
         if os.path.exists(private_key_path) and os.path.exists(public_key_path):
-            print(f"Keys already exist in {self.directory}", flush=True)
+            self._debug_msg(f"Keys already exist in {self.directory}", flush=True)
             return
 
         self.private_key = rsa.generate_private_key(
@@ -280,19 +283,27 @@ class KeyGenerator:
         with open(public_key_path, 'wb') as f:
             f.write(public_key_pem)
 
-        print(f"Keys generated and saved to {self.directory}", flush=True)
+        self._debug_msg(f"Keys generated and saved to {self.directory}", flush=True)
+
+    def _get_or_regenerate(self, key_name):
+        if os.path.exists(os.path.join(self.directory, key_name)) is False:
+            self._debug_msg(f"{key_name} does not exist in {self.directory} so regenerating...")
+            self.generate()
+        with open(os.path.join(self.directory, key_name), 'rb') as f:
+            return f.read().decode()
 
     def get_public_key(self):
-        with open(os.path.join(self.directory, 'public_key.pem'), 'rb') as f:
-            return f.read().decode()
+        return self._get_or_regenerate(self._public_key_name)
 
     def get_private_key(self):
-        with open(os.path.join(self.directory, 'private_key.pem'), 'rb') as f:
-            return f.read().decode()
+        return self._get_or_regenerate(self._private_key_name)
 
 
 class EncryptDecrypt:
-    def __init__(self, *, private_key=None, public_key=None):
+    def __init__(self, *,
+                 private_key=None,
+                 public_key=None,
+                 key_generator: Optional[KeyGenerator] = None):
         self.private_key = serialization.load_pem_private_key(
             private_key.encode(),
             password=None
@@ -300,8 +311,14 @@ class EncryptDecrypt:
         self.public_key = serialization.load_pem_public_key(
             public_key.encode()
         ) if public_key else None
+        self.key_generator = key_generator
 
     def encrypt(self, message: str) -> str:
+        if not self.public_key and self.key_generator is not None:
+            public_key = self.key_generator.get_public_key()
+            self.public_key = serialization.load_pem_public_key(
+                public_key.encode()
+            )
         if not self.public_key:
             raise ValueError("Public key is not set")
 
@@ -326,6 +343,13 @@ class EncryptDecrypt:
         return encrypted_content
 
     def decrypt(self, b64_ciphertext: str):
+        if not self.private_key and self.key_generator is not None:
+            private_key = self.key_generator.get_private_key()
+            self.private_key = serialization.load_pem_private_key(
+                private_key.encode(),
+                password=None
+            )
+
         if not self.private_key:
             raise ValueError("Private key is not set")
 

@@ -19,7 +19,7 @@ from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_o
     deploy_secret_env_file, deploy_serving_endpoint, default_mlrpc_libs, stage_files_for_deployment
 from mlrpc.detect import scan_in_directory
 from mlrpc.flavor import FastAPIFlavor, pack_env_file_into_preload
-from mlrpc.hotreload import hot_reload_on_change
+from mlrpc.hotreload import hot_reload_on_change, make_log_monitor_thread
 from mlrpc.proxy import make_swagger_proxy
 from mlrpc.utils import execute, find_next_open_port, get_profile_contents, DatabricksProfile, get_version
 
@@ -430,11 +430,17 @@ def swagger(
     click.echo("\n\n")
     thread = swagger_in_thread(app, open_port, headless=headless)
     reload_threads = None
+    ws_client = WorkspaceClient(profile=databricks_profile)
     rpc_client = hot_reload.databricks(endpoint_name=endpoint_name,
-                                       ws_client=WorkspaceClient(profile=databricks_profile))
+                                       ws_client=ws_client)
     pwd = Path.cwd()
     click.echo(click.style(f"Doing full sync of: {str(pwd)}", fg="green"))
     rpc_client.hot_reload(str(pwd))
+    logging_thread = make_log_monitor_thread(
+        ws_client,
+        endpoint_name,
+        logging_function=lambda x: click.echo(click.style("[MODEL-SERVING] ", fg="cyan", bold=True) + f"{x}"),
+    )
     if reload is True:
         reload_threads = hot_reload_on_change(Path.cwd(),
                                               rpc_client=rpc_client,
@@ -447,6 +453,8 @@ def swagger(
     if reload_threads is not None:
         for t in reload_threads:
             t.join()
+
+    logging_thread.join()
 
 
 @cli.command()
@@ -467,7 +475,7 @@ def swagger_in_thread(app, port: int, host: str = "0.0.0.0", headless: bool = Fa
     def run_server():
         uvicorn.run(app, host=host, port=port)
 
-    server_thread = threading.Thread(target=run_server)
+    server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
     if headless is False:
         time.sleep(0.5)

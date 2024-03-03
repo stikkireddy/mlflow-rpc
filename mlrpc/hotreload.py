@@ -1,11 +1,17 @@
 import queue
+import re
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, Callable, Literal, List
+from typing import Callable, Literal, List
+from typing import Optional
 
+from databricks.sdk import WorkspaceClient
+from dateutil.parser import parse
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
+from pytz import timezone
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from watchdog.observers import Observer
 
@@ -104,7 +110,7 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
                     else:
                         handle_response(responses, "hot-reload")
 
-    consumer_thread = threading.Thread(target=consumer)
+    consumer_thread = threading.Thread(target=consumer, daemon=True)
     consumer_thread.start()
 
     event_handler = FileChangeHandler()
@@ -113,3 +119,82 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
     observer.start()
 
     return [consumer_thread, observer]
+
+
+
+
+
+def extract_second_box(log_line):
+    matches = re.findall(r'\[.*?\]', log_line)
+    if len(matches) >= 2:
+        return matches[1][1:-1]  # remove brackets
+    else:
+        return None
+
+
+def extract_iso_timestamp(possible_ts: Optional[str]):
+    if possible_ts is None:
+        return None
+    try:
+        naive_dt = parse(possible_ts, ignoretz=True)
+        utc_dt = timezone('UTC').localize(naive_dt).replace(tzinfo=None)
+        return utc_dt
+    except ValueError:
+        return None
+
+
+class LogMonitor:
+    def __init__(self, ws: WorkspaceClient,
+                 endpoint_name: str,
+                 from_beginning: bool = False,
+                 logging_function: Optional[callable] = None,
+                 ):
+        self.ws_client = ws
+        self.endpoint_name = endpoint_name
+        self.model_names = []
+        for se in ws.serving_endpoints.get(endpoint_name).config.served_entities:
+            self.model_names.append(se.name)
+        now = datetime.utcnow().replace(tzinfo=None)
+        self._last_log_ts = {mn: None for mn in self.model_names} if from_beginning else {mn: now for mn in
+                                                                                          self.model_names}
+        if from_beginning is False:
+            logging_function("Looking for logs from", now)
+        self._logging_function = logging_function or print
+
+    def print_logs_if_havent_been_seen(self):
+        logs = []
+        for model_name in self.model_names:
+            resp = self.ws_client.serving_endpoints.logs(self.endpoint_name, model_name)
+            # read logs backwards and stop when we see a timestamp we've seen before
+            latest_ts = None
+            for idx, line in enumerate(reversed(resp.logs.splitlines())):
+                ts = extract_iso_timestamp(extract_second_box(line))
+                if ts is None:
+                    continue
+                if latest_ts is None:
+                    latest_ts = ts
+                if self._last_log_ts[model_name] is not None and ts <= self._last_log_ts[model_name]:
+                    break
+                logs.append(line)
+            self._last_log_ts[model_name] = latest_ts
+
+            for line in reversed(logs):
+                self._logging_function(line)
+        return logs
+
+
+def make_log_monitor_thread(ws: WorkspaceClient,
+                            endpoint_name: str,
+                            from_beginning: bool = False,
+                            logging_function: Optional[callable] = None):
+    def _monitor():
+        monitor = LogMonitor(ws, endpoint_name, from_beginning, logging_function=logging_function)
+        while True:
+            try:
+                monitor.print_logs_if_havent_been_seen()
+            except Exception as e:
+                logging_function(f"Error in log monitor: {e}")
+            finally:
+                time.sleep(10)
+
+    return threading.Thread(target=_monitor, daemon=True)
