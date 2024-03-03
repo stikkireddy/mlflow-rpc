@@ -187,7 +187,11 @@ class LocalServingDispatchHandler(DispatchHandler):
 
         headers = request.headers or []
         headers.append(("Content-Type", "application/json"))
-        resp = httpx.request(method="POST", url=url, headers=headers, json=request.encode().to_mlflow_df_split_dict())
+        # remove content-length header if present because the request is proxied and encoded in a custom way
+        headers = [h for h in headers if h[0].lower() != "content-length"]
+        content = request.encode().to_mlflow_df_split_dict()
+        resp = httpx.request(method="POST", url=url, headers=headers,
+                             json=content)
         predictions = resp.json()["predictions"]
         resp_objs = [ResponseObject.from_serving_resp(pred) for pred in predictions]
         return [MLRPCResponse(
@@ -217,7 +221,6 @@ class ServingEndpointDispatchHandler(DispatchHandler):
             body=response.content
         )
             for response in decoded_resp]
-
 
 
 class ServingRPCClient:

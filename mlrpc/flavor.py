@@ -6,6 +6,7 @@ import random
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -56,7 +57,9 @@ def get_iso_datetime_timezone() -> str:
 
 def debug_msg(msg: str, msg_type: str = "DEFAULT", level: str = "INFO"):
     ts = get_iso_datetime_timezone()
-    print(f"[{ts}][{msg_type}][{level}] - {msg}", flush=True)
+    level = f'[{level}]'
+    msg_type = f'[{msg_type}]'.ljust(18)
+    print(f"[{ts}] {level} {msg_type} - {msg}", flush=True)
 
 
 def copy_files(src: Path, dest: Path, check_dest_empty: bool = True):
@@ -103,6 +106,74 @@ class AppClientProxy:
         self._client = TestClient(app)
 
 
+class ReloadIndicator:
+
+    def __init__(self, reload_indicator_location: str = None, reload_indicator_file: str = None):
+        self._reload_indicator_file = Path(reload_indicator_file or "reload-indicator.txt")
+        self._reload_indicator_dir = Path(reload_indicator_location or "/tmp/mlrpc-reload-indicator")
+        self._reload_indicator = Path(self._reload_indicator_dir) / self._reload_indicator_file
+        self._last_reload_info = None
+        # make sure to boot up if the reload indicator exists
+        if self.does_reload_indicator_exist() is True:
+            self._last_reload_info = self.read_reload_indicator()
+
+    def does_reload_indicator_exist(self) -> bool:
+        return self._reload_indicator.exists()
+
+    def _attempt_write(self, content: Optional[str] = None, attempts: int = 3) -> None:
+        while attempts > 0:
+            try:
+                with self._reload_indicator.open("w") as f:
+                    current_timestamp = get_iso_datetime_timezone()
+                    f.write(content or current_timestamp)
+                break
+            except Exception as e:
+                debug_msg(f"Failed to write to reload indicator: {e}", msg_type="RELOAD_INDICATOR", level="ERROR")
+                attempts -= 1
+                # random wait time to avoid multiple threads writing at the same time
+                time.sleep(random.uniform(1, 3))
+
+    def signal_reload(self, content: Optional[str] = None) -> None:
+        debug_msg("Signaling reload", msg_type="RELOAD_INDICATOR", level="INFO")
+        if self._reload_indicator_dir.exists() is False:
+            self._reload_indicator_dir.mkdir(parents=True, exist_ok=True)
+
+        self._attempt_write(content)
+
+    def read_reload_indicator(self) -> Optional[str]:
+        if self.does_reload_indicator_exist() is False:
+            return None
+        with self._reload_indicator.open("r") as f:
+            return f.read()
+
+    def should_i_reload(self) -> bool:
+        if self._last_reload_info is None and self.does_reload_indicator_exist() is False:
+            return False
+        if self.does_reload_indicator_exist() is True and self._last_reload_info != self.read_reload_indicator():
+            return True
+
+        return False
+
+    def update_last_reload_info(self):
+        self._last_reload_info = self.read_reload_indicator()
+        return self._last_reload_info
+
+
+def make_reload_thread(reload_indicator: ReloadIndicator,
+                       hot_reload_dispatcher: 'HotReloadEventHandler') -> threading.Thread:
+    def reload_checker():
+        debug_msg("Starting reload checker", msg_type="RELOAD_CHECKER", level="INFO")
+        while True:
+            if reload_indicator.should_i_reload() is True:
+                debug_msg(f"[PID:{os.getpid()}] Found reload indicator. Reloading app", msg_type="RELOAD_CHECKER",
+                          level="INFO")
+                hot_reload_dispatcher.reload_app()
+                reload_indicator.update_last_reload_info()
+            time.sleep(5)
+
+    return threading.Thread(target=reload_checker, daemon=True)
+
+
 class HotReloadEventHandler:
     PATH_PREFIX = "__INTERNAL__"
     VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL", "RESET", "GET_PUBLIC_KEY"]
@@ -124,10 +195,14 @@ class HotReloadEventHandler:
         self._key_generator.generate()
         self._encrypt_decrypt = EncryptDecrypt(private_key=self._key_generator.get_private_key(),
                                                public_key=self._key_generator.get_public_key())
+        self._reload_indicator = ReloadIndicator()
+        self._reload_thread = make_reload_thread(self._reload_indicator, self)
+        self._reload_thread.start()
 
     def validate(self):
         debug_msg(
-            f"Validating hot reload dispatcher with {self._app_client_proxy.app} {self._reload_code_path} {self._file_in_code_path} {self._obj_name}",
+            f"Validating hot reload dispatcher with {self._app_client_proxy.app} {self._reload_code_path} "
+            f"{self._file_in_code_path} {self._obj_name}",
             msg_type="HOT_RELOAD_VALIDATION",
             level="INFO")
         if not self._app_client_proxy.app:
@@ -155,7 +230,8 @@ class HotReloadEventHandler:
         self._app_client_proxy.update_app(app_obj)
         debug_msg("Reloaded App!", msg_type="HOT_RELOAD", level="INFO")
 
-    def _validate_checksum(self, content: str, checksum: str) -> bool:
+    @staticmethod
+    def _validate_checksum(content: str, checksum: str) -> bool:
         content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
         debug_msg("Valid checksum", msg_type="HOT_RELOAD", level="INFO")
         return content_hash == checksum
@@ -170,8 +246,8 @@ class HotReloadEventHandler:
                 content="Checksum validation failed"
             )
         base64_to_dir(content, self._reload_code_path)
-        # reload after files get moved
-        self.reload_app()
+        # send reload signal after files get moved
+        self._reload_indicator.signal_reload()
         return ResponseObject(
             status_code=200,
             content="SUCCESS"
@@ -197,6 +273,8 @@ class HotReloadEventHandler:
         payload = json.loads(request.content)
         requirements = payload['requirements']
         install_message = self._install_packages(requirements)
+        # send reload signal after python libs are installed
+        self._reload_indicator.signal_reload()
         return ResponseObject(
             status_code=200,
             content=json.dumps(install_message)
@@ -221,7 +299,7 @@ class HotReloadEventHandler:
             return None
 
         if request.path == f"/{self.PATH_PREFIX}/FULL_SYNC":
-            debug_msg("Dispatching full sync event", msg_type="HOT_RELOAD_FULL_SYNC", level="INFO")
+            debug_msg("Dispatching full sync event", msg_type="FULL_SYNC", level="INFO")
             self._do_full_sync(request)
             return ResponseObject(
                 status_code=200,
@@ -229,11 +307,11 @@ class HotReloadEventHandler:
             )
 
         if request.path == f"/{self.PATH_PREFIX}/REINSTALL":
-            debug_msg("Dispatching reinstall event", msg_type="HOT_RELOAD_REINSTALL", level="INFO")
+            debug_msg("Dispatching reinstall event", msg_type="REINSTALL_REQS", level="INFO")
             return self._do_install(request)
 
         if request.path == f"/{self.PATH_PREFIX}/GET_PUBLIC_KEY":
-            debug_msg("Dispatching get public key event", msg_type="HOT_RELOAD_GET_PUBLIC_KEY", level="INFO")
+            debug_msg("Dispatching get public key event", msg_type="GET_PUBLIC_KEY", level="INFO")
             return ResponseObject(
                 status_code=200,
                 content=json.dumps({
@@ -353,14 +431,9 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         try:
             # happy path things can go wrong :-)
             if self._hot_reload_dispatcher is not None and len(requests) == 1:
-                debug_msg("Checking for hot reload events",
-                          msg_type="PREDICT", level="INFO")
                 event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
                 if event_resp is not None:
                     return response_to_df(event_resp)
-
-            if self._hot_reload_dispatcher is not None:
-                self._hot_reload_dispatcher.reload_app()
 
             for req in requests:
                 resp = self._app_proxy.client.request(
@@ -379,7 +452,8 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 content=f"Error occurred: {str(e)}"
             ))
 
-    def signature(self):
+    @staticmethod
+    def signature():
         full_request = request_to_df(RequestObject(
             method='GET',
             headers=[('Host', 'example.org')],

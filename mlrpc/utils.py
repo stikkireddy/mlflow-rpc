@@ -87,8 +87,10 @@ def get_version(package_name: str = "mlrpc") -> str:
     except metadata.PackageNotFoundError:  # type: ignore
         return "unknown"
 
+
 def file_size_to_mb(file_size: int, _round: int) -> str:
     return f"{round(file_size / (1024 * 1024), _round)} MB"
+
 
 def dir_to_base64(tar_dir, ignore_file: Path = None):
     # Create a BytesIO object
@@ -130,6 +132,7 @@ def dir_to_base64(tar_dir, ignore_file: Path = None):
 
 
 def get_requirements_from_file(file_path: Path) -> List[str]:
+    # TODO: refactor this duplicated code
     if file_path.exists() is False:
         return []
 
