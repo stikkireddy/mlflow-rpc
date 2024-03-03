@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Optional, Dict, List
 
 import mlflow
-from mlflow.models import infer_signature
 import pandas as pd
 from dotenv import dotenv_values
+from mlflow.models import infer_signature
 from starlette.testclient import TestClient
 
 from mlrpc.proto import base64_to_dir, ResponseObject, RequestObject, RequestObjectEncoded, KeyGenerator, EncryptDecrypt
@@ -50,13 +50,22 @@ def pack_env_file_into_preload(envfile: Path, env_dict: Dict[str, str] = None):
         env_dict[MLRPC_ENV_VARS_PRELOAD_KEY] = env_vars
 
 
+def get_iso_datetime_timezone() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def debug_msg(msg: str, msg_type: str = "DEFAULT", level: str = "INFO"):
+    ts = get_iso_datetime_timezone()
+    print(f"[{ts}][{msg_type}][{level}] - {msg}", flush=True)
+
+
 def copy_files(src: Path, dest: Path, check_dest_empty: bool = True):
     # copying due to not wanting requirements for pathspec
     src_dir = str(src)
     dest_dir = str(dest)
 
     if dest.exists() and any(dest.iterdir()) and check_dest_empty is True:
-        print("Destination directory is not empty. Skipping file copy.")
+        debug_msg("Destination directory is not empty. Skipping file copy.", msg_type="COPY_FILES", level="INFO")
         return
 
     # clean the destination directory
@@ -71,7 +80,7 @@ def copy_files(src: Path, dest: Path, check_dest_empty: bool = True):
         for file in files:
             file_path = str(os.path.join(root, file))
             dest_file_path = str(dest_dir / Path(root).relative_to(src_dir) / file)
-            print("Copying", file_path, "to", dest_file_path, flush=True)
+            debug_msg(f"Copying {file_path} to {dest_file_path}", msg_type="COPY_FILES", level="INFO")
             shutil.copy(file_path, dest_file_path)
 
 
@@ -117,9 +126,10 @@ class HotReloadEventHandler:
                                                public_key=self._key_generator.get_public_key())
 
     def validate(self):
-        print(
+        debug_msg(
             f"Validating hot reload dispatcher with {self._app_client_proxy.app} {self._reload_code_path} {self._file_in_code_path} {self._obj_name}",
-            flush=True)
+            msg_type="HOT_RELOAD_VALIDATION",
+            level="INFO")
         if not self._app_client_proxy.app:
             raise ValueError("app_proxy must be set")
         if not self._reload_code_path:
@@ -143,11 +153,11 @@ class HotReloadEventHandler:
         importlib.reload(app_module)
         app_obj = getattr(app_module, self._obj_name)
         self._app_client_proxy.update_app(app_obj)
-        print("Reloaded App!", flush=True)
+        debug_msg("Reloaded App!", msg_type="HOT_RELOAD", level="INFO")
 
     def _validate_checksum(self, content: str, checksum: str) -> bool:
         content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
-        print("Valid checksum", flush=True)
+        debug_msg("Valid checksum", msg_type="HOT_RELOAD", level="INFO")
         return content_hash == checksum
 
     def _do_full_sync(self, request: RequestObject):
@@ -199,7 +209,7 @@ class HotReloadEventHandler:
             try:
                 return self._encrypt_decrypt.decrypt(something)
             except Exception:
-                print("Failed to decrypt", flush=True)
+                debug_msg("Failed to decrypt", msg_type="CONTENT_DECRYPTION", level="ERROR")
                 return something
         return something
 
@@ -211,7 +221,7 @@ class HotReloadEventHandler:
             return None
 
         if request.path == f"/{self.PATH_PREFIX}/FULL_SYNC":
-            print("Dispatching full sync event", flush=True)
+            debug_msg("Dispatching full sync event", msg_type="HOT_RELOAD_FULL_SYNC", level="INFO")
             self._do_full_sync(request)
             return ResponseObject(
                 status_code=200,
@@ -219,10 +229,11 @@ class HotReloadEventHandler:
             )
 
         if request.path == f"/{self.PATH_PREFIX}/REINSTALL":
-            print("Dispatching reinstall event", flush=True)
+            debug_msg("Dispatching reinstall event", msg_type="HOT_RELOAD_REINSTALL", level="INFO")
             return self._do_install(request)
 
         if request.path == f"/{self.PATH_PREFIX}/GET_PUBLIC_KEY":
+            debug_msg("Dispatching get public key event", msg_type="HOT_RELOAD_GET_PUBLIC_KEY", level="INFO")
             return ResponseObject(
                 status_code=200,
                 content=json.dumps({
@@ -251,15 +262,16 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
         import site
-        print("Loading preloaded env vars", flush=True)
         app_dir = app_dir_mlflow_artifacts or self.local_app_dir
         # only add if it's not already there
         site.addsitedir(app_dir)
-        print("Loading code from path", app_dir, flush=True)
+        debug_msg(f"Loading code from path {app_dir}", msg_type="LOAD_MODULE", level="INFO")
         app_module = __import__(self.app_path_in_dir.replace('.py', '').replace('/', '.'), fromlist=[self.app_obj])
-        print(f"Loaded module successfully for {self.app_path_in_dir} from {app_dir}", flush=True)
+        debug_msg(f"Loaded module successfully for {self.app_path_in_dir} from {app_dir}",
+                  msg_type="LOAD_MODULE", level="INFO")
         app_obj = getattr(app_module, self.app_obj)
-        print(f"Loaded app object successfully for {self.app_obj}", flush=True)
+        debug_msg(f"Loaded app object successfully for {self.app_obj}",
+                  msg_type="LOAD_MODULE", level="INFO")
         return app_obj
 
     def validate(self):
@@ -275,6 +287,8 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             raise ValueError(f"Failed to load app module: {e} in {self.local_app_dir}/{self.app_path_in_dir}")
 
     def load_context(self, context):
+        debug_msg("Loading preloaded env vars",
+                  msg_type="LOAD_CONTEXT", level="INFO")
         load_mlrpc_env_vars()
         code_path = self.local_app_dir
         if context is not None:
@@ -289,15 +303,20 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         def boot_app(_temp_code_dir, _temp_key_dir):
             Path(_temp_code_dir).mkdir(parents=True, exist_ok=True)
             Path(_temp_key_dir).mkdir(parents=True, exist_ok=True)
-            print("Hot reload dir being created at /tmp/mlrpc-hot-reload", flush=True)
+            debug_msg("Hot reload dir being created at /tmp/mlrpc-hot-reload",
+                      msg_type="HOT_RELOAD_SETUP", level="INFO")
 
             copy_files(Path(code_path), Path(_temp_code_dir), check_dest_empty=True)
+            debug_msg(f"Copying files from {code_path} to {_temp_code_dir}",
+                      msg_type="HOT_RELOAD_SETUP", level="INFO")
             self._hot_reload_dispatcher = HotReloadEventHandler(
                 app_client_proxy=self._app_proxy,
                 reload_code_path=_temp_code_dir,
                 file_in_code_path=self.app_path_in_dir,
                 obj_name=self.app_obj
             )
+            debug_msg(f"Hot reload dispatcher created for {self.app_obj} in {self.app_path_in_dir}",
+                      msg_type="HOT_RELOAD_SETUP", level="INFO")
             self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=_temp_code_dir))
 
         if os.getenv("MLRPC_HOT_RELOAD", str(self._reloadable)).lower() == "true":
@@ -309,13 +328,15 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                     boot_app(temp_code_dir, temp_key_dir)
                     break
                 except Exception as e:
-                    print(f"Error occurred while booting app: {e}", flush=True)
+                    debug_msg(f"Error occurred while booting app: {e}",
+                              msg_type="LOAD_CONTEXT", level="ERROR")
                     attempts -= 1
                     wait_time = random.uniform(1, 5)
                     time.sleep(wait_time)
                     if attempts == 0:
                         raise
-                    print(f"Retrying in 5 seconds", flush=True)
+                    debug_msg(f"Retrying in 5 seconds",
+                              msg_type="LOAD_CONTEXT", level="INFO")
         else:
             self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=code_path))
 
@@ -332,7 +353,8 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         try:
             # happy path things can go wrong :-)
             if self._hot_reload_dispatcher is not None and len(requests) == 1:
-                print("Checking for hot reload events", flush=True)
+                debug_msg("Checking for hot reload events",
+                          msg_type="PREDICT", level="INFO")
                 event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
                 if event_resp is not None:
                     return response_to_df(event_resp)

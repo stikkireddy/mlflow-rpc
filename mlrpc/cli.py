@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -15,7 +16,8 @@ from databricks.sdk import WorkspaceClient
 from mlrpc.cfg import ConfigFileProcessor, INIT_CONFIG
 from mlrpc.client import hot_reload
 from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_only_last_n_versions, \
-    deploy_secret_env_file, deploy_serving_endpoint, default_mlrpc_libs
+    deploy_secret_env_file, deploy_serving_endpoint, default_mlrpc_libs, stage_files_for_deployment
+from mlrpc.detect import scan_in_directory
 from mlrpc.flavor import FastAPIFlavor, pack_env_file_into_preload
 from mlrpc.hotreload import hot_reload_on_change
 from mlrpc.proxy import make_swagger_proxy
@@ -195,6 +197,36 @@ def local(
         swagger_thread.join()
 
 
+def success_scanning_for_issues(directory: str) -> bool:
+    click.echo(click.style("Scanning for secrets in staged files", fg="green"))
+    issues = list(scan_in_directory(str(directory)))
+    # first check if issues have something
+    if issues is not None and len(issues) > 0:
+        # then filter out the None issues
+        issues_filtered = [i for i in issues if i is not None]
+        # then check if the filtered issues have something
+        if issues_filtered is not None and len(issues_filtered) > 0:
+            click.echo(click.style("Issues found in staged files", fg="yellow"))
+            for issue in issues_filtered:
+                click.echo(click.style(issue, fg="red", bold=True))
+            if sys.stdin.isatty() is False or sys.stdout.isatty() is False or sys.stderr.isatty() is False:
+                raise click.ClickException("Issues found in staged files and stdout is not a tty. Aborting deployment.")
+            if click.confirm(click.style(
+                    "We found potential secrets in the previous statement, would you like to continue?",
+                    fg="red",
+                    bold=True
+            )):
+                click.echo(click.style("Continuing with deployment", fg="green"))
+                return True
+            else:
+                click.echo(click.style("Aborting deployment", fg="red"))
+                # shutil.rmtree(directory)
+                # click.echo(click.style(f"Deleted staging directory: {directory}", fg="green"))
+                return False
+    click.echo(click.style("No issues found in staged files", fg="green"))
+    return True
+
+
 @cli.command(context_settings=CONTEXT_SETTINGS)
 @click.option("-c", "--catalog", "uc_catalog", type=str,
               help="The unity catalog name of the model")
@@ -272,11 +304,17 @@ def deploy(ctx, *,
     if register_model is True:
         click.echo(click.style("Registering model", fg="green"))
         with tempfile.TemporaryDirectory() as temp_dir:
+            click.echo(click.style(f"Staging files for deployment in: {temp_dir}", fg="green"))
+            stage_files_for_deployment(model, str(temp_dir))
+            click.echo(click.style(f"Staged files for deployment in: {temp_dir}", fg="green"))
+            status = success_scanning_for_issues(temp_dir)
+            if status is False:
+                return
             model_version = save_model(ws_client=ws,
                                        experiment=exp,
                                        app=model,
                                        uc_model_path=uc_name,
-                                       dest_path=str(temp_dir),
+                                       code_path=str(temp_dir),
                                        aliases=[latest_alias_name],
                                        reload=reload)
             click.echo(

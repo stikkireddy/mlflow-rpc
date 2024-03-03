@@ -32,7 +32,8 @@ setup(
             "uvicorn",
             "virtualenv",
             "flask", # only required for testing mlflow locally
-            "watchdog"
+            "watchdog",
+            "detect-secrets",
         ],
         "client": [
             "databricks-sdk",

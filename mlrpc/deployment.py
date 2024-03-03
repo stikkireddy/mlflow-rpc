@@ -113,13 +113,21 @@ def build_proper_requirements(file_path: Path) -> List[str]:
         return req_libs + requirements
 
 
+def stage_files_for_deployment(app: FastAPIFlavor, dest_path: Optional[str] = None):
+    src = Path(app.local_app_dir)
+    dest = Path(dest_path)
+    ignore_file = src / ".gitignore"
+    ignore_file = ignore_file if ignore_file.exists() else None
+    copy_files(app.local_app_dir, dest, ignore_file)
+
+
 def save_model(
         ws_client: WorkspaceClient,
         experiment: Experiment,
         app: FastAPIFlavor,
         uc_model_path: str,
         run_name: str = "deployment",
-        dest_path: Optional[str] = None,
+        code_path: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         latest_alias_name: Optional[str] = "current",
         reload: bool = False,
@@ -130,13 +138,8 @@ def save_model(
 
     aliases = aliases or []
     aliases.append(latest_alias_name)
-    aliases = list(set(aliases))
-    src = Path(app.local_app_dir)
-    dest = Path(dest_path)
-    ignore_file = src / ".gitignore"
-    ignore_file = ignore_file if ignore_file.exists() else None
-    copy_files(app.local_app_dir, dest, ignore_file)
-    potential_requirements_file = dest / "requirements.txt"
+    code_path = Path(code_path)
+    potential_requirements_file = code_path / "requirements.txt"
     requirements = build_proper_requirements(potential_requirements_file)
 
     with mlflow.start_run(experiment_id=experiment.experiment_id, run_name=run_name) as run:
@@ -144,7 +147,7 @@ def save_model(
             artifact_path="model",
             python_model=app,
             signature=app.signature(),
-            artifacts={app.code_key: str(dest)},
+            artifacts={app.code_key: str(code_path)},
             pip_requirements=requirements
         )
         mlflow.set_tag("mlrpc_version", get_version("mlrpc"))
