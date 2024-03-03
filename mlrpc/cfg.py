@@ -32,7 +32,7 @@ class ConfigSectionSchema(object):
 
 
 class ConfigFileProcessor(ConfigFileReader):
-    config_files = ["mlrpc.ini", "mlrpc.cfg"]
+    config_files = ["mlrpc.ini", "mlrpc.cfg"] if os.getenv("MLRPC_CONFIG") is None else [os.getenv("MLRPC_CONFIG")]
     config_section_schemas = [
         ConfigSectionSchema.Root,  # PRIMARY SCHEMA
     ]

@@ -106,17 +106,17 @@ def version():
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
-@click.option("-c", "--catalog", "uc_catalog", type=str,
+@click.option("-c", "--catalog", "uc_catalog", type=str, required=True,
               help="The unity catalog name of the model")
-@click.option("-s", "--schema", "uc_schema", type=str,
+@click.option("-s", "--schema", "uc_schema", type=str, required=True,
               help="The unity schema name of the model")
-@click.option("-n", "--name", "name", type=str,
+@click.option("-n", "--name", "name", type=str, required=True,
               help="The name of the app you want to deploy")
-@click.option("-a", "--alias", "latest_alias_name", type=str,
+@click.option("-a", "--alias", "latest_alias_name", type=str, required=True,
               help="The alias name of the model that will be deployed")
 @click.option("-r", "--run-name", "run_name", type=str,
               help="The name of the run to deploy")
-@click.option("-p", "--profile", "databricks_profile", type=str, default="DEFAULT",
+@click.option("-p", "--profile", "databricks_profile", type=str, default=None,
               help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
 @click.option("-e", "--env-file", "envfile", type=click.Path(exists=True, resolve_path=True, file_okay=True),
               default=None, help="The location of the env file to deploy")
@@ -164,16 +164,15 @@ def local(
                                  port=proxy_server_port,
                                  databricks_mode=False,
                                  local_server_port=mlflow_server_port)
-        swagger_thread = swagger_in_thread(app, proxy_server_port, headless=headless)
+        thread, cb = swagger_in_thread(app, proxy_server_port, headless=headless)
         click.echo(click.style(f"Swagger UI available at: http://0.0.0.0:{proxy_server_port}/docs", fg="green"))
-        return swagger_thread
+        return thread, cb
 
     swagger_thread = None
     count = 0
     try:
         for log in execute(
                 cmd=serve_mlflow_model_cmd(
-                    # "models:/srituc.models.demo_app@current"
                     f"runs:/{v.run_id}/model"
                     , mlflow_server_port),
                 env=env_copy,
@@ -181,7 +180,9 @@ def local(
             if "[INFO] Listening at:" in log and no_swagger is False and count == 0:
                 click.clear()
                 click.echo(log)
-                swagger_thread = start_swagger()
+                swagger_thread, open_browser_cb = start_swagger()
+                swagger_thread.start()
+                open_browser_cb()
                 hot_reload_on_change(Path.cwd(), hot_reload.local(port=mlflow_server_port),
                                      logging_function=lambda x: click.echo(click.style(x, fg="yellow")),
                                      error_logging_function=lambda x: click.echo(click.style(x, fg="red", bold=True)),
@@ -220,27 +221,26 @@ def success_scanning_for_issues(directory: str) -> bool:
                 return True
             else:
                 click.echo(click.style("Aborting deployment", fg="red"))
-                # shutil.rmtree(directory)
-                # click.echo(click.style(f"Deleted staging directory: {directory}", fg="green"))
                 return False
     click.echo(click.style("No issues found in staged files", fg="green"))
     return True
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
-@click.option("-c", "--catalog", "uc_catalog", type=str,
+@click.option("-c", "--catalog", "uc_catalog", type=str, required=True,
               help="The unity catalog name of the model")
-@click.option("-s", "--schema", "uc_schema", type=str,
+@click.option("-s", "--schema", "uc_schema", type=str, required=True,
               help="The unity schema name of the model")
-@click.option("--app-root-dir", "app_root_dir", type=click.Path(exists=True, file_okay=False, dir_okay=True),
+@click.option("--app-root-dir", "app_root_dir", required=True,
+              type=click.Path(exists=True, file_okay=False, dir_okay=True),
               help="The root directory of the app")
-@click.option("--app-path-in-root-dir", "app_path_in_root", type=str,
+@click.option("--app-path-in-root-dir", "app_path_in_root", type=str, required=True,
               help="The path to the app in the root directory")
-@click.option("--app-object", "app_obj", type=str,
+@click.option("--app-object", "app_obj", type=str, required=True,
               help="The name of the app object in the app file")
-@click.option("-n", "--name", "name", type=str,
+@click.option("-n", "--name", "name", type=str, required=True,
               help="The name of the app you want to deploy")
-@click.option("-a", "--alias", "latest_alias_name", type=str,
+@click.option("-a", "--alias", "latest_alias_name", type=str, required=True,
               help="The alias name of the model that will be deployed")
 @click.option("--make-experiment", "make_experiment", type=bool, default=True,
               help="Whether to create a new experiment")
@@ -248,7 +248,7 @@ def success_scanning_for_issues(directory: str) -> bool:
               help="The name of the experiment to create")
 @click.option("-r", "--register-model", "register_model", type=bool, default=True,
               help="Whether to register the model")
-@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default="default",
+@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default=None,
               help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
 @click.option("-e", "--env", "env", type=str, default=None,
               help="The environment to deploy the api to")
@@ -319,8 +319,9 @@ def deploy(ctx, *,
                                        aliases=[latest_alias_name + "-devel"],
                                        reload=True)
             click.echo(
-                click.style(f"Development App Artifacts URL: {get_catalog_url(host, uc_name, str(model_version.version))}",
-                            fg="green"))
+                click.style(
+                    f"Development App Artifacts URL: {get_catalog_url(host, uc_name, str(model_version.version))}",
+                    fg="green"))
             click.echo(click.style("Registering Production app", fg="green"))
             model_version = save_model(ws_client=ws,
                                        experiment=exp,
@@ -330,8 +331,9 @@ def deploy(ctx, *,
                                        aliases=[latest_alias_name],
                                        reload=False)
             click.echo(
-                click.style(f"Production App Artifacts URL: {get_catalog_url(host, uc_name, str(model_version.version))}",
-                            fg="green"))
+                click.style(
+                    f"Production App Artifacts URL: {get_catalog_url(host, uc_name, str(model_version.version))}",
+                    fg="green"))
             if only_last_n_versions is not None and only_last_n_versions > 1:
                 click.echo(click.style(f"Only last {only_last_n_versions} versions will be kept", fg="green"))
                 keep_only_last_n_versions(ws, uc_name, only_last_n_versions)
@@ -340,16 +342,16 @@ def deploy(ctx, *,
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
-@click.option("-c", "--catalog", "uc_catalog", type=str,
+@click.option("-c", "--catalog", "uc_catalog", type=str, required=True,
               help="The unity catalog name of the model")
-@click.option("-s", "--schema", "uc_schema", type=str,
+@click.option("-s", "--schema", "uc_schema", type=str, required=True,
               help="The unity schema name of the model")
-@click.option("-n", "--name", "name", type=str,
+@click.option("-n", "--name", "name", type=str, required=True,
               help="The name of the app you want to deploy")
-@click.option("-a", "--alias", "latest_alias_name", type=str,
+@click.option("-a", "--alias", "latest_alias_name", type=str, required=True,
               help="The alias name of the model that will be deployed")
 @click.option("-e", "--env", "env", type=str, default=None)
-@click.option("--endpoint-name", "endpoint_name", type=str,
+@click.option("--endpoint-name", "endpoint_name", type=str, required=True,
               help="The name of the endpoint to deploy")
 @click.option("--secret-scope", "secret_scope", type=str, default=None,
               help="The secret scope to deploy the env file to")
@@ -357,7 +359,7 @@ def deploy(ctx, *,
               help="The secret key to deploy the env file to")
 @click.option("--env-file", "env_file", type=click.Path(exists=True, resolve_path=True, file_okay=True),
               default=None, help="The location of the env file to deploy")
-@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default="default",
+@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default=None,
               help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
 @click.option("--size", "size", type=str, default="Small",
               help="The size of the instance to deploy the endpoint to")
@@ -416,14 +418,47 @@ def serve(ctx, *,
                             size=size)
 
 
+def make_hotreload_threads(ws_client: WorkspaceClient,
+                           endpoint_name: str,
+                           databricks_profile: str,
+                           debug: bool,
+                           headless: bool,
+                           hotreload_port: int):
+    endpoint_suffix = "/served-models/hotreload"
+    print("Starting hot reload server")
+    hotreload_app = make_swagger_proxy(endpoint_name + endpoint_suffix, profile=databricks_profile,
+                                       port=hotreload_port,
+                                       debug=debug, hotreload_enabled=True)
+    hotreload_swagger_thread, hotreload_browser_cb = swagger_in_thread(
+        hotreload_app, hotreload_port, headless=headless, proxy_name="HOTRELOAD-PROXY")
+    hotreload_swagger_thread.start()
+    hotreload_browser_cb()
+    rpc_client = hot_reload.databricks(endpoint_name=endpoint_name + endpoint_suffix,
+                                       ws_client=ws_client)
+    pwd = Path.cwd()
+    prefix = click.style("[HOT-RELOADER]", fg="blue", bold=True) + ' '
+    click.echo(prefix + click.style(f"Doing full sync of: {str(pwd)}", fg="green"))
+    rpc_client.hot_reload(str(pwd))
+    reload_threads = hot_reload_on_change(pwd,
+                                          rpc_client=rpc_client,
+                                          logging_function=lambda x: click.echo(prefix + x),
+                                          error_logging_function=lambda x: click.echo(
+                                              prefix + click.style(x, fg="red", bold=True)),
+                                          success_logging_function=lambda x: click.echo(
+                                              prefix + click.style(x, fg="green", bold=True)))
+    reload_threads.append(hotreload_swagger_thread)
+    return reload_threads
+
+
 @cli.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--endpoint-name", "endpoint_name",
+              required=True,
               help="The name of the databricks endpoint to explore",
               type=str)
 @click.option("-p", "--databricks-profile", "databricks_profile",
               help="The databricks profile to use. This is the section name in ~/.databrickscfg file.",
               type=str,
-              default="default")
+              default=None)
 @click.option("-d", "--debug", "debug", is_flag=True, default=False)
 @click.option("-h", "--headless", "headless", is_flag=True, default=False,
               help="Run local swagger server without opening browser")
@@ -441,34 +476,37 @@ def swagger(
     """
     Explore a databricks endpoint using a swagger UI
     """
-    open_port = find_next_open_port(8000, 9000)
-    app = make_swagger_proxy(endpoint_name, profile=databricks_profile, port=open_port, debug=debug)
+
+    # run the main app
+    main_port = find_next_open_port(8000, 8499)
+    hotreload_port = find_next_open_port(8500, 9000)
+    app = make_swagger_proxy(endpoint_name, profile=databricks_profile, port=main_port, debug=debug)
     click.clear()
-    click.echo(click.style(f"Swagger UI available at: http://0.0.0.0:{open_port}/docs", fg="green"))
+    click.echo(click.style(f"Swagger UI available at: http://0.0.0.0:{main_port}/docs", fg="green"))
+    if reload is True:
+        click.echo(click.style(f"Hot Reload Swagger UI available at: http://0.0.0.0:{hotreload_port}/docs",
+                               fg="green", bold=True))
+    thread, browser_cb = swagger_in_thread(app, main_port, headless=headless)
+    thread.start()
+    browser_cb()
     click.echo("\n\n")
-    thread = swagger_in_thread(app, open_port, headless=headless)
-    reload_threads = None
     ws_client = WorkspaceClient(profile=databricks_profile)
-    rpc_client = hot_reload.databricks(endpoint_name=endpoint_name,
-                                       ws_client=ws_client)
-    pwd = Path.cwd()
-    prefix = click.style("[HOT-RELOADER]", fg="blue", bold=True) + ' '
-    click.echo(prefix + click.style(f"Doing full sync of: {str(pwd)}", fg="green"))
-    rpc_client.hot_reload(str(pwd))
     logging_thread = make_log_monitor_thread(
         ws_client,
         endpoint_name,
         logging_function=lambda x: click.echo(click.style("[MODEL-SERVING] ", fg="cyan", bold=True) + f"{x}"),
     )
     logging_thread.start()
+    reload_threads = None
     if reload is True:
-        reload_threads = hot_reload_on_change(Path.cwd(),
-                                              rpc_client=rpc_client,
-                                              logging_function=lambda x: click.echo(prefix + x),
-                                              error_logging_function=lambda x: click.echo(
-                                                  prefix + click.style(x, fg="red", bold=True)),
-                                              success_logging_function=lambda x: click.echo(
-                                                  prefix + click.style(x, fg="green", bold=True)))
+        # run the reload threads
+        reload_threads = make_hotreload_threads(ws_client,
+                                                endpoint_name,
+                                                databricks_profile,
+                                                debug,
+                                                headless,
+                                                hotreload_port)
+
     thread.join()
     if reload_threads is not None:
         for t in reload_threads:
@@ -491,18 +529,21 @@ def init():
     click.echo("Config file created at mlrpc.cfg")
 
 
-def swagger_in_thread(app, port: int, host: str = "0.0.0.0", headless: bool = False) -> threading.Thread:
+def swagger_in_thread(app, port: int, host: str = "0.0.0.0", headless: bool = False, proxy_name: str = "MLRPC-PROXY"):
+
     def run_server():
         log_config = uvicorn.config.LOGGING_CONFIG
-        prefix = click.style("[MLRPC-PROXY]", fg="magenta", bold=True)
+        prefix = click.style(f"[{proxy_name}]", fg="magenta", bold=True)
         log_formatter = f"{prefix} [%(asctime)s] - [%(levelname)s] - %(message)s"
         log_config["formatters"]["access"]["fmt"] = log_formatter
         log_config["formatters"]["default"]["fmt"] = log_formatter
         uvicorn.run(app, host=host, port=port, log_config=log_config)
 
     server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
-    if headless is False:
-        time.sleep(0.5)
-        webbrowser.open(f"http://{host}:{port}/docs")
-    return server_thread
+
+    def browser_callback():
+        if headless is False:
+            time.sleep(0.5)
+            webbrowser.open(f"http://{host}:{port}/docs")
+
+    return server_thread, browser_callback

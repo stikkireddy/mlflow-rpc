@@ -176,7 +176,7 @@ class LogMonitor:
             self._last_log_ts[model_name] = latest_ts
 
             for line in reversed(logs):
-                self._logging_function(line)
+                self._logging_function(f"[{model_name.upper()}] " + line)
         return logs
 
 

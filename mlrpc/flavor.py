@@ -169,8 +169,12 @@ def make_reload_thread(reload_indicator: ReloadIndicator,
             if reload_indicator.should_i_reload() is True:
                 debug_msg(f"Found reload indicator. Reloading app", msg_type="RELOAD_CHECKER",
                           level="INFO")
-                hot_reload_dispatcher.reload_app()
-                reload_indicator.update_last_reload_info()
+                try:
+                    hot_reload_dispatcher.reload_app()
+                except Exception as e:
+                    debug_msg(f"Failed to reload app: {e}", msg_type="RELOAD_CHECKER", level="ERROR")
+                finally:
+                    reload_indicator.update_last_reload_info()
             time.sleep(5)
 
     return threading.Thread(target=reload_checker, daemon=True)
