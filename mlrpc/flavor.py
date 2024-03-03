@@ -60,7 +60,8 @@ def debug_msg(msg: str, msg_type: str = "DEFAULT", level: str = "INFO"):
     ts = get_iso_datetime_timezone()
     level = f'[{level}]'
     msg_type = f'[{msg_type}]'.ljust(18)
-    print(f"[{ts}] {level} {msg_type} - {msg}", flush=True)
+    worker = f"[WID:{os.getpid()}]"
+    print(f"[{ts}] {level} {msg_type} - {worker} {msg}", flush=True)
 
 
 def copy_files(src: Path, dest: Path, check_dest_empty: bool = True):
@@ -166,7 +167,7 @@ def make_reload_thread(reload_indicator: ReloadIndicator,
         debug_msg("Starting reload checker", msg_type="RELOAD_CHECKER", level="INFO")
         while True:
             if reload_indicator.should_i_reload() is True:
-                debug_msg(f"[PID:{os.getpid()}] Found reload indicator. Reloading app", msg_type="RELOAD_CHECKER",
+                debug_msg(f"Found reload indicator. Reloading app", msg_type="RELOAD_CHECKER",
                           level="INFO")
                 hot_reload_dispatcher.reload_app()
                 reload_indicator.update_last_reload_info()

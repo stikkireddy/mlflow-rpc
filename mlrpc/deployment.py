@@ -7,7 +7,8 @@ from typing import Optional, List, Literal
 import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import ModelVersionInfo
-from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedEntityInput, EndpointStateReady
+from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedEntityInput, EndpointStateReady, \
+    TrafficConfig, Route
 from mlflow.entities import Experiment
 from mlflow.entities.model_registry import ModelVersion
 from pathspec import PathSpec
@@ -239,11 +240,11 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                             endpoint_name: str,
                             uc_model_path: str,
                             model_version: ModelVersion | ModelVersionInfo,
+                            reload_version: ModelVersion | ModelVersionInfo | None = None,
                             secret_scope: Optional[str] = None,
                             secret_key: Optional[str] = None,
                             size: Literal["Small", "Medium", "Large"] = "Small",
-                            scale_to_zero_enabled: bool = True,
-                            ):
+                            scale_to_zero_enabled: bool = True):
     if _check_deployable(ws_client, endpoint_name) == "NOT_UPDATABLE":
         raise ValueError(f"Endpoint {endpoint_name} is not ready state to be updated")
 
@@ -256,18 +257,45 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
             MLRPC_ENV_VARS_PRELOAD_KEY: "{{" + f"secrets/{secret_scope}/{secret_key}" + "}}"
         }
 
+    reload_entities = []
+    reload_traffic = []
+    if reload_version is not None:
+        reload_entities.append(ServedEntityInput(
+            name="hotreload",
+            entity_version=reload_version.version,
+            entity_name=uc_model_path,
+            workload_size=size,
+            scale_to_zero_enabled=scale_to_zero_enabled,
+            environment_vars=env_vars
+        ))
+        reload_traffic.append(Route(
+            served_model_name="hotreload",
+            traffic_percentage=0,
+        ))
+
     if _check_deployable(ws_client, endpoint_name) == "UPDATE":
         return ws_client.serving_endpoints.update_config_and_wait(
             name=endpoint_name,
             served_entities=[
                 ServedEntityInput(
+                    name="main",
                     entity_version=model_version.version,
                     entity_name=uc_model_path,
                     workload_size=size,
                     scale_to_zero_enabled=scale_to_zero_enabled,
                     environment_vars=env_vars
-                )
+                ),
+                *reload_entities
             ],
+            traffic_config=TrafficConfig(
+                routes=[
+                    Route(
+                        served_model_name="main",
+                        traffic_percentage=100,
+                    ),
+                    *reload_traffic
+                ]
+            )
         )
 
     return ws_client.serving_endpoints.create_and_wait(
@@ -281,7 +309,17 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                     workload_size=size,
                     scale_to_zero_enabled=scale_to_zero_enabled,
                     environment_vars=env_vars
-                )
+                ),
+                *reload_entities
             ],
+            traffic_config=TrafficConfig(
+                routes=[
+                    Route(
+                        served_model_name="main",
+                        traffic_percentage=100,
+                    ),
+                    *reload_traffic
+                ]
+            ),
         )
     )

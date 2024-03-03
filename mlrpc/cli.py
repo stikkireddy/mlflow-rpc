@@ -254,8 +254,6 @@ def success_scanning_for_issues(directory: str) -> bool:
               help="The environment to deploy the api to")
 @click.option("--only-last-n-versions", "only_last_n_versions", type=int, default=None,
               help="The number of versions to keep")
-@click.option("--reload", "reload", is_flag=True, default=None,
-              help="Whether to enable hot reload for the endpoint")
 @click.pass_context
 def deploy(ctx, *,
            uc_catalog: str,
@@ -271,7 +269,6 @@ def deploy(ctx, *,
            databricks_profile: str,
            only_last_n_versions: int,
            env: str,
-           reload: bool
            ):
     """
     Deploy a model to databricks model registry
@@ -287,9 +284,12 @@ def deploy(ctx, *,
     ws = WorkspaceClient(profile=databricks_profile)
     uc_name = make_full_uc_path(uc_catalog, uc_schema, name)
     generated_experiment_name = f"{uc_catalog}_{uc_schema}_{name}"
-    model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
-                          local_app_path_in_dir=app_path_in_root,
-                          app_obj=app_obj, reloadable=reload)
+    prod_model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
+                               local_app_path_in_dir=app_path_in_root,
+                               app_obj=app_obj, reloadable=False)
+    devel_model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
+                                local_app_path_in_dir=app_path_in_root,
+                                app_obj=app_obj, reloadable=True)
     if make_experiment is True:
         created_experiment_name = generated_experiment_name if experiment_name is None else experiment_name
         exp = get_or_create_mlflow_experiment(ws, created_experiment_name)
@@ -302,23 +302,36 @@ def deploy(ctx, *,
         click.echo(click.style(f"Experiment URL: {get_experiment_url(host, exp.experiment.experiment_id)}", fg="green"))
 
     if register_model is True:
-        click.echo(click.style("Registering model", fg="green"))
+        click.echo(click.style("Registering Application", fg="green"))
         with tempfile.TemporaryDirectory() as temp_dir:
             click.echo(click.style(f"Staging files for deployment in: {temp_dir}", fg="green"))
-            stage_files_for_deployment(model, str(temp_dir))
+            stage_files_for_deployment(prod_model, str(temp_dir))
             click.echo(click.style(f"Staged files for deployment in: {temp_dir}", fg="green"))
             status = success_scanning_for_issues(temp_dir)
             if status is False:
                 return
+            click.echo(click.style("Registering Development app", fg="green"))
             model_version = save_model(ws_client=ws,
                                        experiment=exp,
-                                       app=model,
+                                       app=devel_model,
+                                       uc_model_path=uc_name,
+                                       code_path=str(temp_dir),
+                                       aliases=[latest_alias_name + "-devel"],
+                                       reload=True)
+            click.echo(
+                click.style(f"Development App Artifacts URL: {get_catalog_url(host, uc_name, str(model_version.version))}",
+                            fg="green"))
+            click.echo(click.style("Registering Production app", fg="green"))
+            model_version = save_model(ws_client=ws,
+                                       experiment=exp,
+                                       app=prod_model,
                                        uc_model_path=uc_name,
                                        code_path=str(temp_dir),
                                        aliases=[latest_alias_name],
-                                       reload=reload)
+                                       reload=False)
             click.echo(
-                click.style(f"Model URL: {get_catalog_url(host, uc_name, str(model_version.version))}", fg="green"))
+                click.style(f"Production App Artifacts URL: {get_catalog_url(host, uc_name, str(model_version.version))}",
+                            fg="green"))
             if only_last_n_versions is not None and only_last_n_versions > 1:
                 click.echo(click.style(f"Only last {only_last_n_versions} versions will be kept", fg="green"))
                 keep_only_last_n_versions(ws, uc_name, only_last_n_versions)
@@ -350,6 +363,8 @@ def deploy(ctx, *,
               help="The size of the instance to deploy the endpoint to")
 @click.option("--scale-to-zero-enabled", "scale_to_zero_enabled", type=bool, default=True,
               help="Whether to enable scale to zero for the endpoint")
+@click.option("--prod", "prod", is_flag=True, default=False,
+              help="Enable production app deployment, disables reload server")
 @click.pass_context
 def serve(ctx, *,
           uc_catalog: str,
@@ -364,6 +379,7 @@ def serve(ctx, *,
           env_file: str,
           size: str,
           scale_to_zero_enabled: bool,
+          prod: bool,
           ):
     """
     Deploy a serving endpoint to databricks model serving
@@ -384,6 +400,7 @@ def serve(ctx, *,
                                env_file=Path(env_file))
 
     version = ws.model_versions.get_by_alias(uc_name, latest_alias_name)
+    reload_version = ws.model_versions.get_by_alias(uc_name, latest_alias_name + "-devel") if prod is False else None
 
     if endpoint_name is None:
         raise click.ClickException("Endpoint name must be provided")
@@ -392,6 +409,7 @@ def serve(ctx, *,
                             endpoint_name=endpoint_name,
                             uc_model_path=uc_name,
                             model_version=version,
+                            reload_version=reload_version,
                             scale_to_zero_enabled=scale_to_zero_enabled,
                             secret_key=secret_key,
                             secret_scope=secret_scope,
