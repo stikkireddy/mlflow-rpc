@@ -186,15 +186,15 @@ class HotReloadEventHandler:
                  file_in_code_path: str,
                  obj_name: str,
                  reset_code_path: Optional[str] = None,
-                 temp_code_dir: Optional[str] = "/tmp/mlrpc-hot-reload"):
+                 temp_key_dir: Optional[str] = "/tmp/mlrpc-hot-reload",
+                 ):
         self._reset_code_path = reset_code_path
         self._obj_name = obj_name
         self._file_in_code_path = file_in_code_path
         self._app_client_proxy = app_client_proxy
         self._reload_code_path = reload_code_path
-        self._key_generator = KeyGenerator(temp_code_dir,
+        self._key_generator = KeyGenerator(temp_key_dir,
                                            debug_msg=functools.partial(debug_msg, msg_type="RSA_KEYGEN"))
-        self._key_generator.generate()
         self._encrypt_decrypt = EncryptDecrypt(key_generator=self._key_generator)
         self._reload_indicator = ReloadIndicator()
         self._reload_thread = make_reload_thread(self._reload_indicator, self)
@@ -392,7 +392,9 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 app_client_proxy=self._app_proxy,
                 reload_code_path=_temp_code_dir,
                 file_in_code_path=self.app_path_in_dir,
-                obj_name=self.app_obj
+                obj_name=self.app_obj,
+                reset_code_path=code_path,
+                temp_key_dir=_temp_key_dir
             )
             debug_msg(f"Hot reload dispatcher created for {self.app_obj} in {self.app_path_in_dir}",
                       msg_type="HOT_RELOAD_SETUP", level="INFO")
