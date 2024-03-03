@@ -210,11 +210,12 @@ class HotReloadEvents:
 
     @staticmethod
     def full_sync(content: str, encryption_key: "EncryptDecrypt") -> RequestObject:
+        enc_content = encryption_key.encrypt(content)
         return RequestObject(
             method="POST",
             path="/__INTERNAL__/FULL_SYNC",
             content=json.dumps({
-                "content": encryption_key.encrypt(content),
+                "content": enc_content,
                 "checksum": hashlib.md5(content.encode('utf-8')).hexdigest()
             })
         )
@@ -312,6 +313,7 @@ class EncryptDecrypt:
             public_key.encode()
         ) if public_key else None
         self.key_generator = key_generator
+        self.chunk_delimiter = '  '
 
     def encrypt(self, message: str) -> str:
         if not self.public_key and self.key_generator is not None:
@@ -323,7 +325,7 @@ class EncryptDecrypt:
             raise ValueError("Public key is not set")
 
         # magic number for 2048 bit RSA key
-        chunk_size = 190
+        chunk_size = 150
 
         # encrypt chunks
         encrypted_chunks = []
@@ -339,7 +341,7 @@ class EncryptDecrypt:
             )
             encrypted_chunks.append(base64.b64encode(encrypted_chunk).decode())
 
-        encrypted_content = '@@'.join(encrypted_chunks)
+        encrypted_content = self.chunk_delimiter.join(encrypted_chunks)
         return encrypted_content
 
     def decrypt(self, b64_ciphertext: str):
@@ -353,7 +355,7 @@ class EncryptDecrypt:
         if not self.private_key:
             raise ValueError("Private key is not set")
 
-        encrypted_chunks = b64_ciphertext.split('@@')
+        encrypted_chunks = b64_ciphertext.split(self.chunk_delimiter)
         decrypted_chunks = []
 
         for chunk in encrypted_chunks:

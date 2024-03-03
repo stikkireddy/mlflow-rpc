@@ -434,21 +434,23 @@ def swagger(
     rpc_client = hot_reload.databricks(endpoint_name=endpoint_name,
                                        ws_client=ws_client)
     pwd = Path.cwd()
-    click.echo(click.style(f"Doing full sync of: {str(pwd)}", fg="green"))
+    prefix = click.style("[HOT-RELOADER]", fg="blue", bold=True) + ' '
+    click.echo(prefix + click.style(f"Doing full sync of: {str(pwd)}", fg="green"))
     rpc_client.hot_reload(str(pwd))
     logging_thread = make_log_monitor_thread(
         ws_client,
         endpoint_name,
         logging_function=lambda x: click.echo(click.style("[MODEL-SERVING] ", fg="cyan", bold=True) + f"{x}"),
     )
+    logging_thread.start()
     if reload is True:
         reload_threads = hot_reload_on_change(Path.cwd(),
                                               rpc_client=rpc_client,
-                                              logging_function=lambda x: click.echo(x),
+                                              logging_function=lambda x: click.echo(prefix + x),
                                               error_logging_function=lambda x: click.echo(
-                                                  click.style(x, fg="red", bold=True)),
+                                                  prefix + click.style(x, fg="red", bold=True)),
                                               success_logging_function=lambda x: click.echo(
-                                                  click.style(x, fg="green", bold=True)))
+                                                  prefix + click.style(x, fg="green", bold=True)))
     thread.join()
     if reload_threads is not None:
         for t in reload_threads:
@@ -473,7 +475,12 @@ def init():
 
 def swagger_in_thread(app, port: int, host: str = "0.0.0.0", headless: bool = False) -> threading.Thread:
     def run_server():
-        uvicorn.run(app, host=host, port=port)
+        log_config = uvicorn.config.LOGGING_CONFIG
+        prefix = click.style("[MLRPC-PROXY]", fg="magenta", bold=True)
+        log_formatter = f"{prefix} [%(asctime)s] - [%(levelname)s] - %(message)s"
+        log_config["formatters"]["access"]["fmt"] = log_formatter
+        log_config["formatters"]["default"]["fmt"] = log_formatter
+        uvicorn.run(app, host=host, port=port, log_config=log_config)
 
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()

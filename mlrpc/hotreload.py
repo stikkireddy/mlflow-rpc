@@ -121,9 +121,6 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
     return [consumer_thread, observer]
 
 
-
-
-
 def extract_second_box(log_line):
     matches = re.findall(r'\[.*?\]', log_line)
     if len(matches) >= 2:
@@ -158,7 +155,7 @@ class LogMonitor:
         self._last_log_ts = {mn: None for mn in self.model_names} if from_beginning else {mn: now for mn in
                                                                                           self.model_names}
         if from_beginning is False:
-            logging_function("Looking for logs from", now)
+            logging_function(f"Looking for logs from: {now}")
         self._logging_function = logging_function or print
 
     def print_logs_if_havent_been_seen(self):

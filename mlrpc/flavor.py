@@ -287,8 +287,8 @@ class HotReloadEventHandler:
         if isinstance(something, str) is True:
             try:
                 return self._encrypt_decrypt.decrypt(something)
-            except Exception:
-                debug_msg("Failed to decrypt", msg_type="CONTENT_DECRYPTION", level="ERROR")
+            except Exception as e:
+                debug_msg(f"Failed to decrypt: {str(e)}", msg_type="CONTENT_DECRYPTION", level="ERROR")
                 return something
         return something
 
