@@ -258,7 +258,7 @@ class KeyGenerator:
         public_key_path = os.path.join(self.directory, self._public_key_name)
 
         if os.path.exists(private_key_path) and os.path.exists(public_key_path):
-            self._debug_msg(f"Keys already exist in {self.directory}", flush=True)
+            self._debug_msg(f"Keys already exist in {self.directory}")
             return
 
         self.private_key = rsa.generate_private_key(
@@ -283,7 +283,7 @@ class KeyGenerator:
         with open(public_key_path, 'wb') as f:
             f.write(public_key_pem)
 
-        self._debug_msg(f"Keys generated and saved to {self.directory}", flush=True)
+        self._debug_msg(f"Keys generated and saved to {self.directory}")
 
     def _get_or_regenerate(self, key_name):
         if os.path.exists(os.path.join(self.directory, key_name)) is False:
