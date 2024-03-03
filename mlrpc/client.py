@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import DataframeSplitInput
 
-from mlrpc.proto import ResponseObject, RequestObject, HotReloadEvents
+from mlrpc.proto import ResponseObject, RequestObject, HotReloadEvents, EncryptDecrypt
 
 MethodType = Literal['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 QueryParams = Dict[str, Union[str, List[str]]]
@@ -145,15 +145,29 @@ class MLRPCClient:
 
 class HotReloadMLRPCClient(MLRPCClient):
 
+    def __init__(self, rpc_dispatch_handler: DispatchHandler):
+        super().__init__(rpc_dispatch_handler)
+        self._encrypt_decrypt = None
+
+    def _setup_encryption(self):
+        resp = self.get_public_key()[0]
+        public_key = json.loads(resp.body)["public_key"]
+        self._encrypt_decrypt = EncryptDecrypt(public_key=public_key)
+
     def hot_reload(self, directory_path) -> List[MLRPCResponse] | MLRPCResponse:
+        if self._encrypt_decrypt is None:
+            self._setup_encryption()
         from mlrpc.utils import dir_to_base64
         reload_dir = Path(directory_path)
         git_ignore = reload_dir / ".gitignore"
         content = dir_to_base64(reload_dir, git_ignore)
-        return self._rpc_dispatch_handler.dispatch(HotReloadEvents.full_sync(content))
+        return self._rpc_dispatch_handler.dispatch(HotReloadEvents.full_sync(content, self._encrypt_decrypt))
 
     def reinstall_requirements(self, requirements: List[str]) -> MLRPCResponse:
         return self._rpc_dispatch_handler.dispatch(HotReloadEvents.reinstall(requirements))
+
+    def get_public_key(self) -> MLRPCResponse:
+        return self._rpc_dispatch_handler.dispatch(HotReloadEvents.get_public_key())
 
 
 class LocalServingDispatchHandler(DispatchHandler):
@@ -185,6 +199,11 @@ class LocalServingDispatchHandler(DispatchHandler):
 
 
 class ServingEndpointDispatchHandler(DispatchHandler):
+
+    def __init__(self, endpoint_name: str, ws_client: WorkspaceClient = None):
+        self._endpoint_name = endpoint_name
+        self._ws = ws_client or WorkspaceClient()
+
     def dispatch(self, request: RequestObject) -> MLRPCResponse | List[MLRPCResponse]:
         serving_resp = self._ws.serving_endpoints.query(
             self._endpoint_name,
@@ -199,9 +218,6 @@ class ServingEndpointDispatchHandler(DispatchHandler):
         )
             for response in decoded_resp]
 
-    def __init__(self, endpoint_name: str, ws_client: WorkspaceClient = None):
-        self._endpoint_name = endpoint_name
-        self._ws = ws_client or WorkspaceClient()
 
 
 class ServingRPCClient:

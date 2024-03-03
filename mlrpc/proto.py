@@ -8,6 +8,9 @@ import tarfile
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple, Dict, Literal, List
 
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
 
 def _b64encode(s: Optional[str]) -> Optional[str]:
     if s is None:
@@ -39,19 +42,14 @@ def _decode_anything(s: Optional[str]) -> any:
 
 
 def base64_to_dir(base64_string, target_dir):
-    # Decode the base64 string back to bytes
     base64_data = base64.b64decode(base64_string)
 
-    # Create a BytesIO object from these bytes
     data = io.BytesIO(base64_data)
 
-    # Remove all files in the target directory
     shutil.rmtree(target_dir)
     os.makedirs(target_dir)
 
-    # Open the tarfile for reading from the binary stream
     with tarfile.open(fileobj=data, mode='r:gz') as tar:
-        # Extract all files to the target directory
         tar.extractall(path=target_dir)
 
 
@@ -211,12 +209,12 @@ class RequestObject:
 class HotReloadEvents:
 
     @staticmethod
-    def full_sync(content: str) -> RequestObject:
+    def full_sync(content: str, encryption_key: "EncryptDecrypt") -> RequestObject:
         return RequestObject(
             method="POST",
             path="/__INTERNAL__/FULL_SYNC",
             content=json.dumps({
-                "content": content,
+                "content": encryption_key.encrypt(content),
                 "checksum": hashlib.md5(content.encode('utf-8')).hexdigest()
             })
         )
@@ -229,6 +227,13 @@ class HotReloadEvents:
         )
 
     @staticmethod
+    def get_public_key() -> RequestObject:
+        return RequestObject(
+            method="POST",
+            path="/__INTERNAL__/GET_PUBLIC_KEY"
+        )
+
+    @staticmethod
     def reinstall(requirements: List[str]) -> RequestObject:
         return RequestObject(
             method="POST",
@@ -237,3 +242,106 @@ class HotReloadEvents:
                 "requirements": requirements
             })
         )
+
+
+class KeyGenerator:
+    def __init__(self, directory):
+        self.directory = directory
+        self.private_key = None
+        self.public_key = None
+
+    def generate(self):
+        private_key_path = os.path.join(self.directory, 'private_key.pem')
+        public_key_path = os.path.join(self.directory, 'public_key.pem')
+
+        if os.path.exists(private_key_path) and os.path.exists(public_key_path):
+            print(f"Keys already exist in {self.directory}", flush=True)
+            return
+
+        self.private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+        self.public_key = self.private_key.public_key()
+
+        private_key_pem = self.private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        public_key_pem = self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+
+        with open(private_key_path, 'wb') as f:
+            f.write(private_key_pem)
+
+        with open(public_key_path, 'wb') as f:
+            f.write(public_key_pem)
+
+        print(f"Keys generated and saved to {self.directory}", flush=True)
+
+    def get_public_key(self):
+        with open(os.path.join(self.directory, 'public_key.pem'), 'rb') as f:
+            return f.read().decode()
+
+    def get_private_key(self):
+        with open(os.path.join(self.directory, 'private_key.pem'), 'rb') as f:
+            return f.read().decode()
+
+
+class EncryptDecrypt:
+    def __init__(self, *, private_key=None, public_key=None):
+        self.private_key = serialization.load_pem_private_key(
+            private_key.encode(),
+            password=None
+        ) if private_key else None
+        self.public_key = serialization.load_pem_public_key(
+            public_key.encode()
+        ) if public_key else None
+
+    def encrypt(self, message: str) -> str:
+        if not self.public_key:
+            raise ValueError("Public key is not set")
+
+        # magic number for 2048 bit RSA key
+        chunk_size = 190
+
+        # encrypt chunks
+        encrypted_chunks = []
+        for i in range(0, len(message), chunk_size):
+            chunk = message[i:i + chunk_size]
+            encrypted_chunk = self.public_key.encrypt(
+                chunk.encode(),
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            encrypted_chunks.append(base64.b64encode(encrypted_chunk).decode())
+
+        encrypted_content = '@@'.join(encrypted_chunks)
+        return encrypted_content
+
+    def decrypt(self, b64_ciphertext: str):
+        if not self.private_key:
+            raise ValueError("Private key is not set")
+
+        encrypted_chunks = b64_ciphertext.split('@@')
+        decrypted_chunks = []
+
+        for chunk in encrypted_chunks:
+            ciphertext = base64.b64decode(chunk)
+            plaintext = self.private_key.decrypt(
+                ciphertext,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            decrypted_chunks.append(plaintext.decode())
+
+        return ''.join(decrypted_chunks)

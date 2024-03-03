@@ -52,6 +52,8 @@ def serve_mlflow_model_cmd(model_uri: str, port: int):
         "4",
         "-p",
         str(port),
+        # "--env-manager",  # for local testing
+        # "local",  # for local testing
     ]
 
 

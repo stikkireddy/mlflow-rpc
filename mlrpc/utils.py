@@ -87,6 +87,8 @@ def get_version(package_name: str = "mlrpc") -> str:
     except metadata.PackageNotFoundError:  # type: ignore
         return "unknown"
 
+def file_size_to_mb(file_size: int, _round: int) -> str:
+    return f"{round(file_size / (1024 * 1024), _round)} MB"
 
 def dir_to_base64(tar_dir, ignore_file: Path = None):
     # Create a BytesIO object
@@ -99,6 +101,7 @@ def dir_to_base64(tar_dir, ignore_file: Path = None):
             gitignore = f.read()
         spec = PathSpec.from_lines(GitWildMatchPattern, gitignore.splitlines())
 
+    total_size = 0  # total size of the files
     with tarfile.open(fileobj=data, mode='w:gz') as tar:
         for root, dirs, files in os.walk(tar_dir):
             for file in files:
@@ -106,6 +109,15 @@ def dir_to_base64(tar_dir, ignore_file: Path = None):
 
                 if spec is not None and spec.match_file(file_path) is True:
                     continue
+
+                file_size = os.path.getsize(file_path)
+
+                if file_size > 10 * 1024 * 1024:  # check if file size is greater than 1MB
+                    raise ValueError(f"File {file} is {file_size_to_mb(file_size, 2)} which is larger than 10MB")
+
+                total_size += file_size
+                if total_size > 64 * 1024 * 1024:  # check if total size is greater than 16MB
+                    raise ValueError("The total size of the files is greater than 16MB")
 
                 rel_path = os.path.relpath(str(os.path.join(root, file)), tar_dir)
                 tar.add(str(os.path.join(root, file)), arcname=rel_path)

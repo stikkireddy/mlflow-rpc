@@ -16,7 +16,7 @@ import pandas as pd
 from dotenv import dotenv_values
 from starlette.testclient import TestClient
 
-from mlrpc.proto import base64_to_dir, ResponseObject, RequestObject, RequestObjectEncoded
+from mlrpc.proto import base64_to_dir, ResponseObject, RequestObject, RequestObjectEncoded, KeyGenerator, EncryptDecrypt
 
 MLRPC_ENV_VARS_PRELOAD_KEY = "MLRPC_ENV_VARS_PRELOAD"
 
@@ -96,7 +96,7 @@ class AppClientProxy:
 
 class HotReloadEventHandler:
     PATH_PREFIX = "__INTERNAL__"
-    VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL", "RESET"]
+    VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL", "RESET", "GET_PUBLIC_KEY"]
 
     def __init__(self,
                  *,
@@ -104,12 +104,17 @@ class HotReloadEventHandler:
                  reload_code_path: str,
                  file_in_code_path: str,
                  obj_name: str,
-                 reset_code_path: Optional[str] = None):
+                 reset_code_path: Optional[str] = None,
+                 temp_code_dir: Optional[str] = "/tmp/mlrpc-hot-reload"):
         self._reset_code_path = reset_code_path
         self._obj_name = obj_name
         self._file_in_code_path = file_in_code_path
         self._app_client_proxy = app_client_proxy
         self._reload_code_path = reload_code_path
+        self._key_generator = KeyGenerator(temp_code_dir)
+        self._key_generator.generate()
+        self._encrypt_decrypt = EncryptDecrypt(private_key=self._key_generator.get_private_key(),
+                                               public_key=self._key_generator.get_public_key())
 
     def validate(self):
         print(
@@ -147,7 +152,7 @@ class HotReloadEventHandler:
 
     def _do_full_sync(self, request: RequestObject):
         payload = json.loads(request.content)
-        content = payload['content']
+        content = self._try_decrypt(payload['content'])
         checksum = payload['checksum']
         if self._validate_checksum(content, checksum) is False:
             return ResponseObject(
@@ -187,6 +192,17 @@ class HotReloadEventHandler:
             content=json.dumps(install_message)
         )
 
+    def _try_decrypt(self, something: Optional[str]) -> Optional[str]:
+        if something is None:
+            return None
+        if isinstance(something, str) is True:
+            try:
+                return self._encrypt_decrypt.decrypt(something)
+            except Exception:
+                print("Failed to decrypt", flush=True)
+                return something
+        return something
+
     def dispatch(self, request: RequestObject) -> Optional[ResponseObject]:
         if request.method != "POST":
             return None
@@ -205,6 +221,14 @@ class HotReloadEventHandler:
         if request.path == f"/{self.PATH_PREFIX}/REINSTALL":
             print("Dispatching reinstall event", flush=True)
             return self._do_install(request)
+
+        if request.path == f"/{self.PATH_PREFIX}/GET_PUBLIC_KEY":
+            return ResponseObject(
+                status_code=200,
+                content=json.dumps({
+                    "public_key": self._key_generator.get_public_key()
+                })
+            )
 
 
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
@@ -262,25 +286,27 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         # only if it's not already there
         # update site packages to include this app dir
 
-        def boot_app():
-            Path(temp_code_dir).mkdir(parents=True, exist_ok=True)
+        def boot_app(_temp_code_dir, _temp_key_dir):
+            Path(_temp_code_dir).mkdir(parents=True, exist_ok=True)
+            Path(_temp_key_dir).mkdir(parents=True, exist_ok=True)
             print("Hot reload dir being created at /tmp/mlrpc-hot-reload", flush=True)
 
-            copy_files(Path(code_path), Path(temp_code_dir), check_dest_empty=True)
+            copy_files(Path(code_path), Path(_temp_code_dir), check_dest_empty=True)
             self._hot_reload_dispatcher = HotReloadEventHandler(
                 app_client_proxy=self._app_proxy,
-                reload_code_path=temp_code_dir,
+                reload_code_path=_temp_code_dir,
                 file_in_code_path=self.app_path_in_dir,
                 obj_name=self.app_obj
             )
-            self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=temp_code_dir))
+            self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=_temp_code_dir))
 
         if os.getenv("MLRPC_HOT_RELOAD", str(self._reloadable)).lower() == "true":
             temp_code_dir = "/tmp/mlrpc-hot-reload"
+            temp_key_dir = "/tmp/mlrpc-hot-reload-keys"
             attempts = 5
             while True:
                 try:
-                    boot_app()
+                    boot_app(temp_code_dir, temp_key_dir)
                     break
                 except Exception as e:
                     print(f"Error occurred while booting app: {e}", flush=True)

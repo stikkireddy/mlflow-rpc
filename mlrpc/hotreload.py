@@ -51,11 +51,6 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
 
         def handle_response(_response: MLRPCResponse | List[MLRPCResponse],
                             event_type: Literal["hot-reload", "reinstall-pip-requirements"]):
-            if isinstance(_response, list):
-                for r in _response:
-                    handle_response(r, event_type)
-                return
-
             if response.status_code != 200:
                 error_logging_function(
                     f"Event: {event_type} failed with status: {_response.status_code} - {_response.body}")
@@ -91,9 +86,13 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
                     continue
 
                 for change in valid_changes:
-                    response = maybe_requirements_txt_change(change.src_path, rpc_client)
-                    if response is not None:
-                        handle_response(response, "reinstall-pip-requirements")
+                    responses = maybe_requirements_txt_change(change.src_path, rpc_client)
+                    if responses is not None:
+                        if isinstance(responses, list):
+                            for response in responses:
+                                handle_response(response, "reinstall-pip-requirements")
+                        else:
+                            handle_response(responses, "reinstall-pip-requirements")
 
                 logging_function(f"Files changed firing hot reload for {dir_to_watch}...")
                 responses = rpc_client.hot_reload(dir_to_watch)
