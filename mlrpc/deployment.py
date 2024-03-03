@@ -57,7 +57,13 @@ class LibraryManager:
 def default_mlrpc_libs():
     lbm = LibraryManager()
     libs = []
-    important_libs = ["cloudpickle", "mlflow-skinny", "fastapi", "pandas", "httpx", "python-dotenv"]
+    important_libs = ["cloudpickle",
+                      "mlflow-skinny",
+                      "fastapi",
+                      "pandas",
+                      "httpx",
+                      "python-dotenv",
+                      "cryptography"]
     mlrpc_req = "mlrpc"
     mlflow_req = "mlflow"
     if lbm.has_library(mlrpc_req) is False or len(lbm.get_library_version(mlrpc_req).split(".")) > 3:
