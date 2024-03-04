@@ -9,6 +9,15 @@ properly without you having to know about custom python models.
 This is currently experimental in nature. If interest increases, will work on hardening and ensure it has a stable build
 and tests.
 
+> "If you know fastapi, you can deploy models on databricks model serving!"
+
+## Why FastAPI?
+
+It is a modern, fast (high-performance), web framework for building APIs with Python 3.7+ based on standard Python type hints and pydantic.
+It is a great way to build APIs and has a lot of features that make it easy to use.
+
+https://pypistats.org/packages/fastapi
+
 ## Key features
 
 1. **FastAPI**: Host your FastAPI code in databricks
