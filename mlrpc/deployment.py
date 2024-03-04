@@ -265,7 +265,7 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
             name="hotreload",
             entity_version=reload_version.version,
             entity_name=uc_model_path,
-            workload_size=size,
+            workload_size="Small",  # workload size for hotreload should always be small
             scale_to_zero_enabled=scale_to_zero_enabled,
             environment_vars=env_vars
         ))

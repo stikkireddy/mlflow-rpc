@@ -47,7 +47,8 @@ INIT_CONFIG = """## The following lines are minimum required config
 # uc_schema = <schema name>
 # endpoint_name = <endpoint name>
 
-# data_dir=data # this is optional if you want to upload larger binaries like chroma, sqlite, faiss, lancedb, etc
+# this is optional if you want to upload larger binaries like chroma, sqlite, faiss, lancedb, etc
+# data_dir=data
 
 # Cost controls
 # size = Small # Small, Medium, Large
@@ -57,7 +58,8 @@ INIT_CONFIG = """## The following lines are minimum required config
 
 # latest_alias_name = <alternative alias> uses "current" by default
 
-# experiment_name = <experiment name> # optional specify your experiment name
+## optional specify your experiment name
+# experiment_name = <experiment name> 
 
 ## Define where your code is
 # app_root_dir = <root of your directory>
