@@ -305,6 +305,7 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
             name=endpoint_name,
             served_entities=[
                 ServedEntityInput(
+                    name="main",
                     entity_version=model_version.version,
                     entity_name=uc_model_path,
                     workload_size=size,
