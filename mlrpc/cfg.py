@@ -14,6 +14,7 @@ class ConfigSectionSchema(object):
         app_root_dir = Param(type=click.Path(), default=os.getcwd())
         app_path_in_root = Param(type=str, default="app.py")
         app_obj = Param(type=str, default="app")
+        data_dir = Param(type=click.Path(exists=True, dir_okay=True), default=None)
         uc_catalog = Param(type=str)
         uc_schema = Param(type=str)
         endpoint_name = Param(type=str)
@@ -45,6 +46,8 @@ INIT_CONFIG = """## The following lines are minimum required config
 # uc_catalog = <catalog name>
 # uc_schema = <schema name>
 # endpoint_name = <endpoint name>
+
+# data_dir=data # this is optional if you want to upload larger binaries like chroma, sqlite, faiss, lancedb, etc
 
 # Cost controls
 # size = Small # Small, Medium, Large

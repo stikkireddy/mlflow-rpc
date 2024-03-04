@@ -209,6 +209,7 @@ def copy_files(src, dest, ignore_file=None):
             dest_file_path = str(dest_dir / Path(root).relative_to(src_dir) / file)
             if ignore_file is None:
                 print("Copying", file_path, "to", dest_file_path)
+                Path(dest_file_path).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(file_path, dest_file_path)
                 continue
 

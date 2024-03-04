@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import DataframeSplitInput
 
-from mlrpc.proto import ResponseObject, RequestObject, HotReloadEvents, EncryptDecrypt
+from mlrpc.proto import ResponseObject, RequestObject, HotReloadEvents, EncryptDecrypt, DataFileChunker
 
 MethodType = Literal['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 QueryParams = Dict[str, Union[str, List[str]]]
@@ -168,6 +168,10 @@ class HotReloadMLRPCClient(MLRPCClient):
 
     def get_public_key(self) -> MLRPCResponse:
         return self._rpc_dispatch_handler.dispatch(HotReloadEvents.get_public_key())
+
+    def upload_data_dir(self, root_dir: str, data_dir: str):
+        for upload_file_req in DataFileChunker(root_dir=root_dir, data_dir=data_dir).iter_requests():
+            self._rpc_dispatch_handler.dispatch(upload_file_req)
 
 
 class LocalServingDispatchHandler(DispatchHandler):

@@ -6,6 +6,7 @@ import os
 import shutil
 import tarfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Sequence, Tuple, Dict, Literal, List, Callable
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -221,6 +222,17 @@ class HotReloadEvents:
         )
 
     @staticmethod
+    def upload_large_file(c: "Chunk"):
+        return RequestObject(
+            method="POST",
+            path="/__INTERNAL__/UPLOAD_LARGE_FILE",
+            content=json.dumps({
+                "chunk": c.dict()
+            })
+        )
+
+
+    @staticmethod
     def reload() -> RequestObject:
         return RequestObject(
             method="POST",
@@ -371,3 +383,137 @@ class EncryptDecrypt:
             decrypted_chunks.append(plaintext.decode())
 
         return ''.join(decrypted_chunks)
+
+
+@dataclass
+class Chunk:
+    content_b64: str
+    chunk_number: int
+    next_offset: int
+    encrypted: bool = False
+    eof: bool = False
+    start_of_file: bool = False
+    permissions: Optional[str] = None
+    relative_file_path: Optional[str] = None
+    # TODO: include checksums
+
+    def dict(self):
+        return {
+            "content_b64": self.content_b64,
+            "chunk_number": self.chunk_number,
+            "next_offset": self.next_offset,
+            "encrypted": self.encrypted,
+            "eof": self.eof,
+            "start_of_file": self.start_of_file,
+            "permissions": self.permissions,
+            "relative_file_path": self.relative_file_path
+        }
+
+    def __str__(self):
+        return (f"Chunk {self.chunk_number} - {self.next_offset} - {self.encrypted} - "
+                f"{self.eof} - {self.start_of_file} - {self.permissions} - {self.relative_file_path}")
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class DataFileChunker:
+
+    def __init__(self,
+                 root_dir: str,
+                 data_dir: str,
+                 chunk_size_bytes: int = 10000000,
+                 encrypt_decrypt: Optional[EncryptDecrypt] = None):
+        self.data_dir = data_dir
+        self.root_dir = root_dir
+        self.chunk_size_bytes = chunk_size_bytes
+        self.encrypt_decrypt = encrypt_decrypt
+
+    def _get_offset(self, last_chunk: Optional[Chunk] = None) -> int:
+        if last_chunk is None:
+            return 0
+
+        return last_chunk.next_offset or 0
+
+    def _is_eof(self, last_chunk: Optional[Chunk] = None) -> bool:
+        if last_chunk is None:
+            return False
+        return last_chunk.eof
+
+    def make_chunk(self, file_path: str, last_chunk: Optional[Chunk] = None) -> Chunk:
+        with open(file_path, 'rb') as f:
+            offset = self._get_offset(last_chunk)
+            f.seek(offset)
+            content = f.read(self.chunk_size_bytes)
+            content_b64 = base64.b64encode(content).decode()
+            if self.encrypt_decrypt:
+                content_b64 = self.encrypt_decrypt.encrypt(content_b64)
+
+            return Chunk(
+                relative_file_path=Path(file_path).relative_to(self.root_dir).as_posix(),
+                start_of_file=offset == 0,
+                permissions=oct(os.stat(file_path).st_mode & 0o777),
+                content_b64=content_b64,
+                chunk_number=last_chunk.chunk_number + 1 if last_chunk else 0,
+                next_offset=f.tell(),
+                encrypted=bool(self.encrypt_decrypt),
+                eof=f.tell() == os.fstat(f.fileno()).st_size
+            )
+
+    def make_n_chunks(self, file_path: str, n: int, last_chunk: Optional[Chunk] = None) -> List[Chunk]:
+        chunks = []
+        for _ in range(n):
+            if self._is_eof(last_chunk):
+                break
+            chunk = self.make_chunk(file_path, last_chunk=last_chunk)
+            chunks.append(chunk)
+            last_chunk = chunk
+        return chunks
+
+    def iter_chunks(self, file_path: str, last_chunk: Optional[Chunk] = None):
+        while True:
+            if self._is_eof(last_chunk):
+                break
+            chunk = self.make_chunk(file_path, last_chunk=last_chunk)
+            yield chunk
+            last_chunk = chunk
+
+    def iter_files_chunks(self):
+        root_path = Path(self.root_dir)
+        data_path = root_path / self.data_dir
+        for file in data_path.rglob("*"):
+            for chunk in self.iter_chunks(str(file)):
+                yield chunk
+
+    def iter_requests(self):
+        for chunk in self.iter_files_chunks():
+            yield HotReloadEvents.upload_large_file(c=chunk)
+
+class DataFileChunkWriter:
+
+    def __init__(self,
+                 root_dir: str,
+                 encrypt_decrypt: Optional[EncryptDecrypt] = None):
+        self.root_dir = root_dir
+        self.encrypt_decrypt = encrypt_decrypt
+
+    def write_chunk(self, chunk: Chunk):
+        target_file = Path(self.root_dir) / chunk.relative_file_path
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        write_mode = 'wb' if chunk.start_of_file else 'ab'
+        with target_file.open(write_mode) as f:
+            content = base64.b64decode(chunk.content_b64)
+            if chunk.encrypted:
+                decrypted = self.encrypt_decrypt.decrypt(chunk.content_b64)
+                content: bytes = base64.b64decode(decrypted)
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        if chunk.permissions is not None:
+            os.chmod(target_file, int(chunk.permissions, 8))
+        return True
+
+    def write_chunks(self, chunks: List[Chunk]):
+        for chunk in chunks:
+            self.write_chunk(chunk)
+        return True

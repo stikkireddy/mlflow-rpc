@@ -16,7 +16,7 @@ from databricks.sdk import WorkspaceClient
 from mlrpc.cfg import ConfigFileProcessor, INIT_CONFIG
 from mlrpc.client import hot_reload
 from mlrpc.deployment import get_or_create_mlflow_experiment, save_model, keep_only_last_n_versions, \
-    deploy_secret_env_file, deploy_serving_endpoint, default_mlrpc_libs, stage_files_for_deployment
+    deploy_secret_env_file, deploy_serving_endpoint, default_mlrpc_libs, stage_files_for_deployment, copy_files
 from mlrpc.detect import scan_in_directory
 from mlrpc.flavor import FastAPIFlavor, pack_env_file_into_preload
 from mlrpc.hotreload import hot_reload_on_change, make_log_monitor_thread
@@ -92,8 +92,8 @@ def make_full_uc_path(catalog: str, schema: str, name: str):
     return f"{catalog}.{schema}.{name}"
 
 
-@cli.command()
-def version():
+@cli.command("version")
+def _version():
     """
     Print the version of the package
     """
@@ -152,7 +152,7 @@ def local(
     if envfile is not None:
         pack_env_file_into_preload(Path(envfile), env_copy)
     uc_name = make_full_uc_path(uc_catalog, uc_schema, name)
-    alias = latest_alias_name
+    alias = latest_alias_name + "-devel"
     v = ws.model_versions.get_by_alias(uc_name, alias)
     host = get_only_host(profile.host)
     click.echo(click.style(f"Model URL: {get_catalog_url(host, uc_name, str(v.version))}", fg="green"))
@@ -238,6 +238,8 @@ def success_scanning_for_issues(directory: str) -> bool:
               help="The path to the app in the root directory")
 @click.option("--app-object", "app_obj", type=str, required=True,
               help="The name of the app object in the app file")
+@click.option("--data-dir", "data_dir", default=None,
+              type=click.Path(exists=True, resolve_path=True, file_okay=False, dir_okay=True))
 @click.option("-n", "--name", "name", type=str, required=True,
               help="The name of the app you want to deploy")
 @click.option("-a", "--alias", "latest_alias_name", type=str, required=True,
@@ -261,6 +263,7 @@ def deploy(ctx, *,
            app_root_dir: str,
            app_path_in_root: str,
            app_obj: str,
+           data_dir: str,
            name: str,
            latest_alias_name: str,
            make_experiment: bool,
@@ -306,6 +309,11 @@ def deploy(ctx, *,
         with tempfile.TemporaryDirectory() as temp_dir:
             click.echo(click.style(f"Staging files for deployment in: {temp_dir}", fg="green"))
             stage_files_for_deployment(prod_model, str(temp_dir))
+            if data_dir is not None:
+                relative_path = Path(data_dir).relative_to(app_root_dir)
+                target_dir = Path(temp_dir) / relative_path
+                click.echo(click.style(f"Copying data directory: {data_dir} to: {target_dir}", fg="green"))
+                copy_files(data_dir, target_dir, None)
             click.echo(click.style(f"Staged files for deployment in: {temp_dir}", fg="green"))
             status = success_scanning_for_issues(temp_dir)
             if status is False:
@@ -487,9 +495,9 @@ def swagger(
         click.echo(click.style(f"Hot Reload Swagger UI available at: http://0.0.0.0:{hotreload_port}/docs",
                                fg="green", bold=True))
     thread, browser_cb = swagger_in_thread(app, main_port, headless=headless)
+    click.echo("\n\n")
     thread.start()
     browser_cb()
-    click.echo("\n\n")
     ws_client = WorkspaceClient(profile=databricks_profile)
     logging_thread = make_log_monitor_thread(
         ws_client,

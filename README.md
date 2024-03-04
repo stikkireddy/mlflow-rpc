@@ -2,9 +2,25 @@
 
 Host REST APIs via FastAPI in Databricks Serverless Model serving via this rpc abstraction.
 
-This tool is not a framework, in the sense that you do not modify your code! It acts as a build step/proxy layer
+MLRPC does not modify your FastAPI code! It acts as a build step/proxy layer
 and invokes your FastAPI code in a databricks serverless model serving environment and routes to the right endpoints 
-properly without you having to know about custom python models.
+properly without you having to know about custom python models. 
+
+## Key features
+
+1. **FastAPI**: Host your FastAPI code in databricks
+2. Generate OpenAPI client objects
+3. Swagger UI to explore your endpoint
+4. Hot reload your FastAPI code to the remote endpoint
+5. Hot reloads of code are encrypted
+6. No need to manage your own pyfunc model
+7. Full support for environments (dev, test, prod) and interactive development
+
+## Limitations
+
+1. Only supports FastAPI
+2. Requires mlrpc client or follow spec to query the endpoint
+3. Does not support FastAPI lifecycle events
 
 ## Installation
 
@@ -27,12 +43,15 @@ mlrpc init
 ### 2. Edit the config file
 
 ```toml
+## The following lines are minimum required config
 ## You need to have the app section
 # [app]
 # name = <app name>
 # uc_catalog = <catalog name>
 # uc_schema = <schema name>
 # endpoint_name = <endpoint name>
+
+# data_dir=data # this is optional if you want to upload larger binaries like chroma, sqlite, faiss, lancedb, etc
 
 # Cost controls
 # size = Small # Small, Medium, Large
@@ -64,6 +83,8 @@ mlrpc deploy -p <databricks profile>
 
 ### 4. [OPTIONAL] verify in valid model deployment server locally
 
+This may not work for you if your models require gpus or other resources that wont exist on your laptop
+
 ```
 mlrpc local -p <databricks profile>
 ```
@@ -74,9 +95,9 @@ mlrpc local -p <databricks profile>
 mlrpc serve -p <databricks profile>
 ```
 
-### 6. Explore the deployed endpoint via swagger proxy
+### 6. Explore the deployed endpoint via swagger proxy and hot reloading
 
 ```
-mlrpc serve -p <databricks profile>
+mlrpc swagger -p <databricks profile>
 ```
 

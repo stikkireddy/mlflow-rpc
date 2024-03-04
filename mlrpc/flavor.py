@@ -18,7 +18,8 @@ from dotenv import dotenv_values
 from mlflow.models import infer_signature
 from starlette.testclient import TestClient
 
-from mlrpc.proto import base64_to_dir, ResponseObject, RequestObject, RequestObjectEncoded, KeyGenerator, EncryptDecrypt
+from mlrpc.proto import base64_to_dir, ResponseObject, RequestObject, RequestObjectEncoded, KeyGenerator, \
+    EncryptDecrypt, DataFileChunkWriter, Chunk
 
 MLRPC_ENV_VARS_PRELOAD_KEY = "MLRPC_ENV_VARS_PRELOAD"
 
@@ -182,7 +183,7 @@ def make_reload_thread(reload_indicator: ReloadIndicator,
 
 class HotReloadEventHandler:
     PATH_PREFIX = "__INTERNAL__"
-    VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL", "RESET", "GET_PUBLIC_KEY"]
+    VALID_EVENTS = ["FULL_SYNC", "RELOAD", "REINSTALL", "RESET", "GET_PUBLIC_KEY", "UPLOAD_LARGE_FILE"]
 
     def __init__(self,
                  *,
@@ -204,6 +205,9 @@ class HotReloadEventHandler:
         self._reload_indicator = ReloadIndicator()
         self._reload_thread = make_reload_thread(self._reload_indicator, self)
         self._reload_thread.start()
+        self._data_chunk_writer = DataFileChunkWriter(
+            root_dir=self._reload_code_path,
+        )
 
     def validate(self):
         debug_msg(
@@ -254,6 +258,20 @@ class HotReloadEventHandler:
         base64_to_dir(content, self._reload_code_path)
         # send reload signal after files get moved
         self._reload_indicator.signal_reload()
+        return ResponseObject(
+            status_code=200,
+            content="SUCCESS"
+        )
+
+    def _large_file_save(self, request: RequestObject):
+        payload = json.loads(request.content)
+        chunk = Chunk(**payload['chunk'])
+        # TODO: get checksum from payload in future
+        if chunk.start_of_file:
+            debug_msg(f"Starting new file: {chunk.relative_file_path}", msg_type="UPLOAD_LARGE_FILE", level="INFO")
+        if chunk.eof:
+            debug_msg(f"Ending file: {chunk.relative_file_path}", msg_type="UPLOAD_LARGE_FILE", level="INFO")
+        self._data_chunk_writer.write_chunk(chunk)
         return ResponseObject(
             status_code=200,
             content="SUCCESS"
@@ -324,6 +342,10 @@ class HotReloadEventHandler:
                     "public_key": self._key_generator.get_public_key()
                 })
             )
+
+        if request.path == f"/{self.PATH_PREFIX}/UPLOAD_LARGE_FILE":
+            debug_msg("Dispatching large file upload event", msg_type="UPLOAD_LARGE_FILE", level="INFO")
+            return self._large_file_save(request)
 
 
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
