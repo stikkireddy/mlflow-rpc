@@ -1,10 +1,13 @@
-# mlrpc
+# mlrpc [Experimental]
 
 Host REST APIs via FastAPI in Databricks Serverless Model serving via this rpc abstraction.
 
 MLRPC does not modify your FastAPI code! It acts as a build step/proxy layer
 and invokes your FastAPI code in a databricks serverless model serving environment and routes to the right endpoints 
 properly without you having to know about custom python models. 
+
+This is currently experimental in nature. If interest increases, will work on hardening and ensure it has a stable build
+and tests.
 
 ## Key features
 
@@ -100,4 +103,9 @@ mlrpc serve -p <databricks profile>
 ```
 mlrpc swagger -p <databricks profile>
 ```
+
+## Disclaimer
+mlrpc is not developed, endorsed not supported by Databricks. It is provided as-is; no warranty is derived from using this package. 
+For more details, please refer to the license.
+
 
