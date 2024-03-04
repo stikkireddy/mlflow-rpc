@@ -42,13 +42,25 @@ def _decode_anything(s: Optional[str]) -> any:
     return json.loads(json_str)
 
 
-def base64_to_dir(base64_string, target_dir):
+def base64_to_dir(base64_string, target_dir,
+                  skip_certain_directories: Optional[List[str]] = None,
+                  debug_msg: Optional[Callable] = None):
     base64_data = base64.b64decode(base64_string)
 
     data = io.BytesIO(base64_data)
+    tgt_dir_path = Path(target_dir)
+    directory_names = [Path(skip_dir).name for skip_dir in skip_certain_directories]
+    if debug_msg is not None:
+        debug_msg(f"Skipping directories: {directory_names}", msg_type="HOT_RELOAD", level="INFO")
+    for item in tgt_dir_path.iterdir():
+        if item.is_dir() and item.name in (directory_names or []):
+            continue  # Skip directories to ignore
+        elif item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
 
-    shutil.rmtree(target_dir)
-    os.makedirs(target_dir)
+    tgt_dir_path.mkdir(parents=True, exist_ok=True)
 
     with tarfile.open(fileobj=data, mode='r:gz') as tar:
         tar.extractall(path=target_dir)
@@ -231,7 +243,6 @@ class HotReloadEvents:
             })
         )
 
-
     @staticmethod
     def reload() -> RequestObject:
         return RequestObject(
@@ -395,6 +406,7 @@ class Chunk:
     start_of_file: bool = False
     permissions: Optional[str] = None
     relative_file_path: Optional[str] = None
+
     # TODO: include checksums
 
     def dict(self):
@@ -488,6 +500,7 @@ class DataFileChunker:
     def iter_requests(self):
         for chunk in self.iter_files_chunks():
             yield HotReloadEvents.upload_large_file(c=chunk)
+
 
 class DataFileChunkWriter:
 

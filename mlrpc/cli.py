@@ -289,10 +289,10 @@ def deploy(ctx, *,
     generated_experiment_name = f"{uc_catalog}_{uc_schema}_{name}"
     prod_model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
                                local_app_path_in_dir=app_path_in_root,
-                               app_obj=app_obj, reloadable=False)
+                               app_obj=app_obj, reloadable=False, data_dir=data_dir)
     devel_model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
                                 local_app_path_in_dir=app_path_in_root,
-                                app_obj=app_obj, reloadable=True)
+                                app_obj=app_obj, reloadable=True, data_dir=data_dir)
     if make_experiment is True:
         created_experiment_name = generated_experiment_name if experiment_name is None else experiment_name
         exp = get_or_create_mlflow_experiment(ws, created_experiment_name)
@@ -324,7 +324,7 @@ def deploy(ctx, *,
                                        app=devel_model,
                                        uc_model_path=uc_name,
                                        code_path=str(temp_dir),
-                                       aliases=[latest_alias_name + "-devel"],
+                                       latest_alias_name=latest_alias_name + "-devel",
                                        reload=True)
             click.echo(
                 click.style(
@@ -336,7 +336,6 @@ def deploy(ctx, *,
                                        app=prod_model,
                                        uc_model_path=uc_name,
                                        code_path=str(temp_dir),
-                                       aliases=[latest_alias_name],
                                        reload=False)
             click.echo(
                 click.style(
@@ -538,7 +537,6 @@ def init():
 
 
 def swagger_in_thread(app, port: int, host: str = "0.0.0.0", headless: bool = False, proxy_name: str = "MLRPC-PROXY"):
-
     def run_server():
         log_config = uvicorn.config.LOGGING_CONFIG
         prefix = click.style(f"[{proxy_name}]", fg="magenta", bold=True)

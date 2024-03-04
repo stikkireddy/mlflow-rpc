@@ -19,7 +19,7 @@ from mlrpc.client import MLRPCResponse, HotReloadMLRPCClient
 from mlrpc.utils import get_requirements_from_file
 
 
-def get_gitignore_specs(dir_to_watch) -> Optional[PathSpec]:
+def get_ignore_specs_for_hotreload(dir_to_watch) -> Optional[PathSpec]:
     ignore_file = Path(dir_to_watch) / ".gitignore"
     if ignore_file is not None and ignore_file.exists() and ignore_file.is_file():
         ignore_file = str(ignore_file)
@@ -77,7 +77,7 @@ def hot_reload_on_change(dir_to_watch, rpc_client: HotReloadMLRPCClient, frequen
 
             # If there are any changes, call full_sync
             if any_changes:
-                ignore_specs = get_gitignore_specs(dir_to_watch)
+                ignore_specs = get_ignore_specs_for_hotreload(dir_to_watch)
                 valid_changes = []
                 for change in any_changes:
                     # if ignore specs is there and doesnt match its valid file

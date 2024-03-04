@@ -80,6 +80,8 @@ def copy_files(src: Path, dest: Path, check_dest_empty: bool = True):
     if dest.exists():
         shutil.rmtree(dest)
 
+    dest.mkdir(parents=True, exist_ok=True)
+
     for root, dirs, files in os.walk(src_dir):
         for directory in dirs:
             dest_subdir = dest_dir / Path(root).relative_to(src_dir) / directory
@@ -195,6 +197,7 @@ class HotReloadEventHandler:
                  obj_name: str,
                  reset_code_path: Optional[str] = None,
                  temp_key_dir: Optional[str] = "/tmp/mlrpc-hot-reload",
+                 dont_delete_data_dir: Optional[str] = None
                  ):
         self._reset_code_path = reset_code_path
         self._obj_name = obj_name
@@ -210,6 +213,7 @@ class HotReloadEventHandler:
         self._data_chunk_writer = DataFileChunkWriter(
             root_dir=self._reload_code_path,
         )
+        self._dont_delete_data_dir = dont_delete_data_dir
 
     def validate(self):
         debug_msg(
@@ -257,7 +261,10 @@ class HotReloadEventHandler:
                 status_code=400,
                 content="Checksum validation failed"
             )
-        base64_to_dir(content, self._reload_code_path)
+        skip_dirs = [self._dont_delete_data_dir] if self._dont_delete_data_dir else None
+        base64_to_dir(content, self._reload_code_path,
+                      skip_certain_directories=skip_dirs,
+                      debug_msg=debug_msg)
         # send reload signal after files get moved
         self._reload_indicator.signal_reload()
         return ResponseObject(
@@ -368,7 +375,8 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                  local_app_path_in_dir: Optional[str] = "app.py",
                  app_obj: Optional[str] = "app",
                  artifact_code_key="code",
-                 reloadable: Optional[bool] = False):
+                 reloadable: Optional[bool] = False,
+                 data_dir: Optional[str] = None):
         self._reloadable = reloadable
         self.local_app_dir = local_app_dir_abs
         self.code_key = artifact_code_key
@@ -378,6 +386,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         self._app_proxy = None
         self._hot_reload_dispatcher: Optional[HotReloadEventHandler] = None
         self._app_working_directory = None
+        self._dont_delete_data_dir = data_dir
 
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
         with app_directory(self._app_working_directory):
@@ -426,7 +435,9 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             debug_msg("Hot reload dir being created at /tmp/mlrpc-hot-reload",
                       msg_type="HOT_RELOAD_SETUP", level="INFO")
 
-            copy_files(Path(code_path), Path(_temp_code_dir), check_dest_empty=True)
+            copy_files(Path(code_path),
+                       Path(_temp_code_dir),
+                       check_dest_empty=True, )
             debug_msg(f"Copying files from {code_path} to {_temp_code_dir}",
                       msg_type="HOT_RELOAD_SETUP", level="INFO")
             self._hot_reload_dispatcher = HotReloadEventHandler(
@@ -435,7 +446,8 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 file_in_code_path=self.app_path_in_dir,
                 obj_name=self.app_obj,
                 reset_code_path=code_path,
-                temp_key_dir=_temp_key_dir
+                temp_key_dir=_temp_key_dir,
+                dont_delete_data_dir=self._dont_delete_data_dir
             )
             debug_msg(f"Hot reload dispatcher created for {self.app_obj} in {self.app_path_in_dir}",
                       msg_type="HOT_RELOAD_SETUP", level="INFO")
@@ -494,9 +506,10 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
             return pd.DataFrame([resp.dict() for resp in responses])
         except Exception as e:
+            debug_msg(f"Error occurred: {e}", msg_type="PREDICT", level="ERROR")
             return response_to_df(ResponseObject(
                 status_code=500,
-                content=f"Error occurred: {str(e)}"
+                content=f"Error occurred during predict look at server logs."
             ))
 
     @staticmethod
