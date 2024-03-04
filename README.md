@@ -32,7 +32,9 @@ https://pypistats.org/packages/fastapi
 
 1. Only supports FastAPI
 2. Requires mlrpc client or follow spec to query the endpoint
-3. Does not support FastAPI lifecycle events
+3. Does not yet support FastAPI lifecycle events
+4. Does not support websockets (model serving does not support websockets)
+5. Does not support SSE (server side events)
 
 ## Installation
 
