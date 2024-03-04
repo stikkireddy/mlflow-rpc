@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import hashlib
 import io
@@ -5,6 +6,7 @@ import json
 import os
 import random
 import shutil
+import site
 import subprocess
 import sys
 import threading
@@ -348,6 +350,16 @@ class HotReloadEventHandler:
             return self._large_file_save(request)
 
 
+@contextlib.contextmanager
+def app_directory(destination):
+    prev_dir = os.getcwd()
+    os.chdir(destination)
+    try:
+        yield
+    finally:
+        os.chdir(prev_dir)
+
+
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
     def __init__(self,
@@ -365,32 +377,33 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         self.app_obj = app_obj
         self._app_proxy = None
         self._hot_reload_dispatcher: Optional[HotReloadEventHandler] = None
+        self._app_working_directory = None
 
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
-        import site
-        app_dir = app_dir_mlflow_artifacts or self.local_app_dir
-        # only add if it's not already there
-        site.addsitedir(app_dir)
-        debug_msg(f"Loading code from path {app_dir}", msg_type="LOAD_MODULE", level="INFO")
-        app_module = __import__(self.app_path_in_dir.replace('.py', '').replace('/', '.'), fromlist=[self.app_obj])
-        debug_msg(f"Loaded module successfully for {self.app_path_in_dir} from {app_dir}",
-                  msg_type="LOAD_MODULE", level="INFO")
-        app_obj = getattr(app_module, self.app_obj)
-        debug_msg(f"Loaded app object successfully for {self.app_obj}",
-                  msg_type="LOAD_MODULE", level="INFO")
-        return app_obj
+        with app_directory(self._app_working_directory):
+            app_dir = app_dir_mlflow_artifacts or self.local_app_dir
+            # only add if it's not already there
+            site.addsitedir(app_dir)
+            debug_msg(f"Loading code from path {app_dir}", msg_type="LOAD_MODULE", level="INFO")
+            app_module = __import__(self.app_path_in_dir.replace('.py', '').replace('/', '.'), fromlist=[self.app_obj])
+            debug_msg(f"Loaded module successfully for {self.app_path_in_dir} from {app_dir}",
+                      msg_type="LOAD_MODULE", level="INFO")
+            app_obj = getattr(app_module, self.app_obj)
+            debug_msg(f"Loaded app object successfully for {self.app_obj}",
+                      msg_type="LOAD_MODULE", level="INFO")
+            return app_obj
 
-    def validate(self):
-        if not self.local_app_dir:
-            raise ValueError("local_app_dir_abs must be set")
-        if not self.app_path_in_dir:
-            raise ValueError("app_path_in_dir must be set")
-        if not self.app_obj:
-            raise ValueError("app_obj must be set")
-        try:
-            self.load_module()
-        except Exception as e:
-            raise ValueError(f"Failed to load app module: {e} in {self.local_app_dir}/{self.app_path_in_dir}")
+    # def validate(self):
+    #     if not self.local_app_dir:
+    #         raise ValueError("local_app_dir_abs must be set")
+    #     if not self.app_path_in_dir:
+    #         raise ValueError("app_path_in_dir must be set")
+    #     if not self.app_obj:
+    #         raise ValueError("app_obj must be set")
+    #     try:
+    #         self.load_module()
+    #     except Exception as e:
+    #         raise ValueError(f"Failed to load app module: {e} in {self.local_app_dir}/{self.app_path_in_dir}")
 
     def load_context(self, context):
         debug_msg("Loading preloaded env vars",
@@ -401,6 +414,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
             code_path = context.artifacts[self.code_key]
 
         self._app_proxy = AppClientProxy(None)
+        self._app_working_directory = code_path
 
         # add the app_path to the pythonpath to load modules
         # only if it's not already there
@@ -430,6 +444,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         if os.getenv("MLRPC_HOT_RELOAD", str(self._reloadable)).lower() == "true":
             temp_code_dir = "/tmp/mlrpc-hot-reload"
             temp_key_dir = "/tmp/mlrpc-hot-reload-keys"
+            self._app_working_directory = temp_code_dir
             attempts = 5
             while True:
                 try:
@@ -460,21 +475,23 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
         try:
             # happy path things can go wrong :-)
-            if self._hot_reload_dispatcher is not None and len(requests) == 1:
-                event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
-                if event_resp is not None:
-                    return response_to_df(event_resp)
+            with app_directory(self._app_working_directory):
+                if self._hot_reload_dispatcher is not None and len(requests) == 1:
+                    event_resp = self._hot_reload_dispatcher.dispatch(requests[0])
+                    if event_resp is not None:
+                        return response_to_df(event_resp)
 
-            for req in requests:
-                resp = self._app_proxy.client.request(
-                    method=req.method,
-                    url=req.path,
-                    headers=req.headers,
-                    params=req.query_params,
-                    data=req.content,
-                    timeout=req.timeout
-                )
-                responses.append(ResponseObject.from_httpx_resp(resp).encode())
+                for req in requests:
+                    resp = self._app_proxy.client.request(
+                        method=req.method,
+                        url=req.path,
+                        headers=req.headers,
+                        params=req.query_params,
+                        data=req.content,
+                        timeout=req.timeout
+                    )
+                    responses.append(ResponseObject.from_httpx_resp(resp).encode())
+
             return pd.DataFrame([resp.dict() for resp in responses])
         except Exception as e:
             return response_to_df(ResponseObject(
