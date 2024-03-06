@@ -28,8 +28,10 @@ class ConfigSectionSchema(object):
         secret_scope = Param(type=str, default=None)
         secret_key = Param(type=str, default=None)
         env_file = Param(type=click.Path(), default=None)
+        type = Param(type=str, default="CPU")
         size = Param(type=str, default="Small")
         scale_to_zero_enabled = Param(type=bool, default=True)
+        bootstrap_python_script = Param(type=click.Path(), default=None)
 
 
 class ConfigFileProcessor(ConfigFileReader):
@@ -51,7 +53,12 @@ INIT_CONFIG = """## The following lines are minimum required config
 # data_dir=data
 
 # Cost controls
-# size = Small # Small, Medium, Large
+# Small, Medium, Large are valid values
+# size = Small
+# various values 
+# refer to https://docs.databricks.com/en/machine-learning/model-serving/create-manage-serving-endpoints.html
+# or https://learn.microsoft.com/en-us/azure/databricks/machine-learning/model-serving/create-manage-serving-endpoints
+# type = CPU
 # scale_to_zero_enabled = true # true, false
 
 ## The following lines are optional and not required

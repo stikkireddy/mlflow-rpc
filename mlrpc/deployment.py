@@ -244,13 +244,11 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                             reload_version: ModelVersion | ModelVersionInfo | None = None,
                             secret_scope: Optional[str] = None,
                             secret_key: Optional[str] = None,
-                            size: Literal["Small", "Medium", "Large"] = "Small",
+                            workload_type: str = "CPU",
+                            size: str = "Small",
                             scale_to_zero_enabled: bool = True):
     if _check_deployable(ws_client, endpoint_name) == "NOT_UPDATABLE":
         raise ValueError(f"Endpoint {endpoint_name} is not ready state to be updated")
-
-    if size not in ["Small", "Medium", "Large"]:
-        raise ValueError(f"Size must be one of 'Small', 'Medium', 'Large' but got {size}")
 
     env_vars = None
     if secret_scope is not None and secret_key is not None:
@@ -265,6 +263,7 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
             name="hotreload",
             entity_version=reload_version.version,
             entity_name=uc_model_path,
+            workload_type=workload_type,
             workload_size="Small",  # workload size for hotreload should always be small
             scale_to_zero_enabled=scale_to_zero_enabled,
             environment_vars=env_vars
@@ -283,6 +282,7 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                     entity_version=model_version.version,
                     entity_name=uc_model_path,
                     workload_size=size,
+                    workload_type=workload_type,
                     scale_to_zero_enabled=scale_to_zero_enabled,
                     environment_vars=env_vars
                 ),
@@ -309,6 +309,7 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                     entity_version=model_version.version,
                     entity_name=uc_model_path,
                     workload_size=size,
+                    workload_type=workload_type,
                     scale_to_zero_enabled=scale_to_zero_enabled,
                     environment_vars=env_vars
                 ),

@@ -49,7 +49,7 @@ def base64_to_dir(base64_string, target_dir,
 
     data = io.BytesIO(base64_data)
     tgt_dir_path = Path(target_dir)
-    directory_names = [Path(skip_dir).name for skip_dir in skip_certain_directories]
+    directory_names = [Path(skip_dir).name for skip_dir in skip_certain_directories or []]
     if debug_msg is not None:
         debug_msg(f"Skipping directories: {directory_names}", msg_type="HOT_RELOAD", level="INFO")
     for item in tgt_dir_path.iterdir():

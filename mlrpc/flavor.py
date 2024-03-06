@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import functools
 import hashlib
 import io
@@ -11,8 +12,9 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Callable
 
 import mlflow
 import pandas as pd
@@ -196,9 +198,11 @@ class HotReloadEventHandler:
                  file_in_code_path: str,
                  obj_name: str,
                  reset_code_path: Optional[str] = None,
-                 temp_key_dir: Optional[str] = "/tmp/mlrpc-hot-reload",
-                 dont_delete_data_dir: Optional[str] = None
+                 temp_key_dir: Optional[str] = "/tmp/mlrpc-hot-reload-keys",
+                 dont_delete_data_dir: Optional[str] = None,
+                 bootstrap_script_callback: Optional[Callable] = None
                  ):
+        self._bootstrap_script_callback = bootstrap_script_callback
         self._reset_code_path = reset_code_path
         self._obj_name = obj_name
         self._file_in_code_path = file_in_code_path
@@ -236,6 +240,8 @@ class HotReloadEventHandler:
         return normalized_req_path in valid_events
 
     def reload_app(self):
+        debug_msg("Reloading bootstrap script!", msg_type="HOT_RELOAD", level="INFO")
+        self._bootstrap_script_callback()
         import site
         import importlib
         site.addsitedir(self._reload_code_path)
@@ -367,6 +373,62 @@ def app_directory(destination):
         os.chdir(prev_dir)
 
 
+def try_become_leader(
+        lock_file_path: Path,
+        pid_file_path: Path,
+        bootstrap_script_path: Path,
+        sleep_waiting_for_leader: int = 5
+):
+    try:
+        with open(lock_file_path, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            time.sleep(sleep_waiting_for_leader)  # retain the lock for 5 seconds
+            debug_msg("I was elected the leader. Running the bootstrap script...",
+                      msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+            debug_msg("Releasing the leader lock...",
+                      msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+            run_bootstrap_script(
+                pid_file_path,
+                bootstrap_script_path
+            )
+            # unlock after bootstrap is initialized
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+        try:
+            lock_file_path.unlink()
+        except FileNotFoundError:
+            debug_msg("Lock file was already deleted by another process.",
+                      msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+
+    except BlockingIOError:
+        debug_msg("Not the leader, proceeding as a regular worker.",
+                  msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+
+
+def cleanup_if_exists(pid_file_path: Path):
+    if pid_file_path.exists():
+        with open(pid_file_path, 'r') as f:
+            pid = int(f.read())
+            debug_msg(f"Killing the bootstrap script with PID: {pid}",
+                      msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+            subprocess.run(f"kill -9 {pid}", shell=True)
+            pid_file_path.unlink()
+        debug_msg("Cleaned up the pid file.",
+                  msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+
+
+def run_bootstrap_script(pid_file_path: Path, bootstrap_script_path: Path):
+    cleanup_if_exists(pid_file_path)
+    debug_msg("Running the bootstrap script...",
+              msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+    process = subprocess.Popen([sys.executable, str(bootstrap_script_path)],
+                               start_new_session=True)
+    pid = process.pid
+    with open(pid_file_path, 'w') as f:
+        f.write(str(pid))
+    debug_msg(f"Bootstrap script is running with PID: {pid}",
+              msg_type="BOOTSTRAP_SCRIPT", level="INFO")
+
+
 class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
     def __init__(self,
@@ -376,7 +438,8 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                  app_obj: Optional[str] = "app",
                  artifact_code_key="code",
                  reloadable: Optional[bool] = False,
-                 data_dir: Optional[str] = None):
+                 data_dir: Optional[str] = None,
+                 bootstrap_script: Optional[str] = None):
         self._reloadable = reloadable
         self.local_app_dir = local_app_dir_abs
         self.code_key = artifact_code_key
@@ -387,6 +450,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
         self._hot_reload_dispatcher: Optional[HotReloadEventHandler] = None
         self._app_working_directory = None
         self._dont_delete_data_dir = data_dir
+        self._bootstrap_script = bootstrap_script
 
     def load_module(self, app_dir_mlflow_artifacts: Optional[str] = None):
         with app_directory(self._app_working_directory):
@@ -413,6 +477,37 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
     #         self.load_module()
     #     except Exception as e:
     #         raise ValueError(f"Failed to load app module: {e} in {self.local_app_dir}/{self.app_path_in_dir}")
+
+    def _run_bootstrap_script(self, code_dir: Path | str,
+                              delay: int = 5
+                              ):
+        if isinstance(code_dir, str):
+            code_dir = Path(code_dir)
+
+        bootstrap_stage_dir = "/tmp/mlrpc-bootstrap"
+        bootstrap_stage_filename = "bootstrap.py"
+        if self._bootstrap_script is None:
+            return
+        bootstrap_script_path = Path(code_dir) / self._bootstrap_script
+        if not bootstrap_script_path.exists():
+            return
+
+        # stage bootstrap script
+        Path(bootstrap_stage_dir).mkdir(parents=True, exist_ok=True)
+        bootstrap_staged_file = Path(bootstrap_stage_dir, bootstrap_stage_filename)
+        shutil.copy(bootstrap_script_path, bootstrap_staged_file)
+
+        with app_directory(bootstrap_stage_dir):
+            lock_file_path = Path(bootstrap_stage_dir, "leader.lock")
+            pid_file_path = Path(bootstrap_stage_dir, "bootstrap.pid")
+            try_become_leader(lock_file_path,
+                              pid_file_path,
+                              bootstrap_staged_file,
+                              # we want the leader to wait 5 seconds roughly
+                              # before unlocking the leader election file
+                              # TODO: remove this in future
+                              sleep_waiting_for_leader=delay
+                              )
 
     def load_context(self, context):
         debug_msg("Loading preloaded env vars",
@@ -447,7 +542,8 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                 obj_name=self.app_obj,
                 reset_code_path=code_path,
                 temp_key_dir=_temp_key_dir,
-                dont_delete_data_dir=self._dont_delete_data_dir
+                dont_delete_data_dir=self._dont_delete_data_dir,
+                bootstrap_script_callback=functools.partial(self._run_bootstrap_script, _temp_code_dir, delay=0)
             )
             debug_msg(f"Hot reload dispatcher created for {self.app_obj} in {self.app_path_in_dir}",
                       msg_type="HOT_RELOAD_SETUP", level="INFO")
@@ -472,7 +568,10 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
                         raise
                     debug_msg(f"Retrying in 5 seconds",
                               msg_type="LOAD_CONTEXT", level="INFO")
+            # all code is copied and temp_code_dir is source of truth
+            self._run_bootstrap_script(temp_code_dir)
         else:
+            self._run_bootstrap_script(code_path)
             self._app_proxy.update_app(self.load_module(app_dir_mlflow_artifacts=code_path))
 
     def predict(self, context, model_input: pd.DataFrame, params=None):
@@ -506,6 +605,7 @@ class FastAPIFlavor(mlflow.pyfunc.PythonModel):
 
             return pd.DataFrame([resp.dict() for resp in responses])
         except Exception as e:
+            traceback.print_exc()
             debug_msg(f"Error occurred: {e}", msg_type="PREDICT", level="ERROR")
             return response_to_df(ResponseObject(
                 status_code=500,

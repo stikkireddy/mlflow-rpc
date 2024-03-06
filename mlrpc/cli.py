@@ -256,6 +256,9 @@ def success_scanning_for_issues(directory: str) -> bool:
               help="The environment to deploy the api to")
 @click.option("--only-last-n-versions", "only_last_n_versions", type=int, default=None,
               help="The number of versions to keep")
+@click.option("--bootstrap-python-script", "bootstrap_python_script",
+              type=click.Path(exists=True, file_okay=True), default=None,
+              help="The bootstrap script to run on each container")
 @click.pass_context
 def deploy(ctx, *,
            uc_catalog: str,
@@ -271,6 +274,7 @@ def deploy(ctx, *,
            register_model: bool,
            databricks_profile: str,
            only_last_n_versions: int,
+           bootstrap_python_script: str,
            env: str,
            ):
     """
@@ -289,10 +293,12 @@ def deploy(ctx, *,
     generated_experiment_name = f"{uc_catalog}_{uc_schema}_{name}"
     prod_model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
                                local_app_path_in_dir=app_path_in_root,
-                               app_obj=app_obj, reloadable=False, data_dir=data_dir)
+                               app_obj=app_obj, reloadable=False, data_dir=data_dir,
+                               bootstrap_script=bootstrap_python_script)
     devel_model = FastAPIFlavor(local_app_dir_abs=str(app_root_dir),
                                 local_app_path_in_dir=app_path_in_root,
-                                app_obj=app_obj, reloadable=True, data_dir=data_dir)
+                                app_obj=app_obj, reloadable=True, data_dir=data_dir,
+                                bootstrap_script=bootstrap_python_script)
     if make_experiment is True:
         created_experiment_name = generated_experiment_name if experiment_name is None else experiment_name
         exp = get_or_create_mlflow_experiment(ws, created_experiment_name)
@@ -370,6 +376,8 @@ def deploy(ctx, *,
               help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
 @click.option("--size", "size", type=str, default="Small",
               help="The size of the instance to deploy the endpoint to")
+@click.option("--type", "type", type=str, default="CPU",
+              help="The type of workload (CPU, or various GPU Sizes)")
 @click.option("--scale-to-zero-enabled", "scale_to_zero_enabled", type=bool, default=True,
               help="Whether to enable scale to zero for the endpoint")
 @click.option("--prod", "prod", is_flag=True, default=False,
@@ -389,6 +397,7 @@ def serve(ctx, *,
           size: str,
           scale_to_zero_enabled: bool,
           prod: bool,
+          type: str, # noqa
           ):
     """
     Deploy a serving endpoint to databricks model serving
@@ -419,6 +428,7 @@ def serve(ctx, *,
                             uc_model_path=uc_name,
                             model_version=version,
                             reload_version=reload_version,
+                            workload_type=type,
                             scale_to_zero_enabled=scale_to_zero_enabled,
                             secret_key=secret_key,
                             secret_scope=secret_scope,
