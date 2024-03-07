@@ -61,6 +61,10 @@ INIT_CONFIG = """## The following lines are minimum required config
 # type = CPU
 # scale_to_zero_enabled = true # true, false
 
+# This is an optional field if you want to run a python script before the main app
+# this is great if you want to spawn a vllm process, deepspeed-mi server, tei, tgi, some app in another lang.
+# bootstrap_python_script = <path to your python script>
+
 ## The following lines are optional and not required
 
 # latest_alias_name = <alternative alias> uses "current" by default

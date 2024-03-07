@@ -92,7 +92,7 @@ mlrpc init
 ### 3. Deploy the artifacts
 
 ```
-mlrpc deploy -p <databricks profile>
+mlrpc build -p <databricks profile>
 ```
 
 ### 4. [OPTIONAL] verify in valid model deployment server locally
@@ -112,7 +112,7 @@ mlrpc serve -p <databricks profile>
 ### 6. Explore the deployed endpoint via swagger proxy and hot reloading
 
 ```
-mlrpc swagger -p <databricks profile>
+mlrpc connect -p <databricks profile>
 ```
 
 ## Disclaimer

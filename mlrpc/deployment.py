@@ -1,5 +1,6 @@
 import os
 import shutil
+from datetime import timedelta
 from importlib.metadata import distributions
 from pathlib import Path
 from typing import Optional, List, Literal
@@ -286,7 +287,7 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                     scale_to_zero_enabled=scale_to_zero_enabled,
                     environment_vars=env_vars
                 ),
-                *reload_entities
+                *reload_entities,
             ],
             traffic_config=TrafficConfig(
                 routes=[
@@ -296,7 +297,8 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                     ),
                     *reload_traffic
                 ]
-            )
+            ),
+            timeout=timedelta(minutes=60)
         )
 
     return ws_client.serving_endpoints.create_and_wait(
@@ -324,5 +326,6 @@ def deploy_serving_endpoint(ws_client: WorkspaceClient,
                     *reload_traffic
                 ]
             ),
-        )
+        ),
+        timeout=timedelta(minutes=60)
     )

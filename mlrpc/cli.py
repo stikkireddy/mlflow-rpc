@@ -6,7 +6,7 @@ import time
 import webbrowser
 from pathlib import Path
 from subprocess import CalledProcessError
-from typing import Dict, Optional
+from typing import Dict, Optional, Callable
 from urllib.parse import urlparse
 
 import click
@@ -70,6 +70,10 @@ def get_catalog_url(host: str, uc_name: str, version: str):
 
 def get_experiment_url(host: str, experiment_id: str):
     return f"https://{host}/ml/experiments/{experiment_id}"
+
+
+def get_endpoint_events_url(host: str, endpoint_name: str):
+    return f"https://{host}/ml/endpoints/{endpoint_name}/events"
 
 
 CONTEXT_SETTINGS = dict(default_map=ConfigFileProcessor.read_config())
@@ -226,59 +230,68 @@ def success_scanning_for_issues(directory: str) -> bool:
     return True
 
 
+def apply_build_options(f: Callable):
+    options = [
+        click.option("-c", "--catalog", "uc_catalog", type=str, required=True,
+                     help="The unity catalog name of the model"),
+        click.option("-s", "--schema", "uc_schema", type=str, required=True,
+                     help="The unity schema name of the model"),
+        click.option("--app-root-dir", "app_root_dir", required=True,
+                     type=click.Path(exists=True, file_okay=False, dir_okay=True),
+                     help="The root directory of the app"),
+        click.option("--app-path-in-root-dir", "app_path_in_root", type=str, required=True,
+                     help="The path to the app in the root directory"),
+        click.option("--app-object", "app_obj", type=str, required=True,
+                     help="The name of the app object in the app file"),
+        click.option("--data-dir", "data_dir", default=None,
+                     type=click.Path(exists=True, resolve_path=True, file_okay=False, dir_okay=True)),
+        click.option("-n", "--name", "name", type=str, required=True,
+                     help="The name of the app you want to deploy"),
+        click.option("-a", "--alias", "latest_alias_name", type=str, required=True,
+                     help="The alias name of the model that will be deployed"),
+        click.option("--make-experiment", "make_experiment", type=bool, default=True,
+                     help="Whether to create a new experiment"),
+        click.option("--experiment-name", "experiment_name", type=str, default=None,
+                     help="The name of the experiment to create"),
+        click.option("-r", "--register-model", "register_model", type=bool, default=True,
+                     help="Whether to register the model"),
+        click.option("-p", "--databricks-profile", "databricks_profile", type=str, default=None,
+                     help="The databricks profile to use. This is the section name in ~/.databrickscfg file."),
+        click.option("-e", "--env", "env", type=str, default=None,
+                     help="The environment to deploy the api to"),
+        click.option("--only-last-n-versions", "only_last_n_versions", type=int, default=None,
+                     help="The number of versions to keep"),
+        click.option("--bootstrap-python-script", "bootstrap_python_script",
+                     type=click.Path(exists=True, file_okay=True), default=None,
+                     help="The bootstrap script to run on each container"),
+    ]
+    for option in options:
+        f = option(f)
+    return f
+
+
 @cli.command(context_settings=CONTEXT_SETTINGS)
-@click.option("-c", "--catalog", "uc_catalog", type=str, required=True,
-              help="The unity catalog name of the model")
-@click.option("-s", "--schema", "uc_schema", type=str, required=True,
-              help="The unity schema name of the model")
-@click.option("--app-root-dir", "app_root_dir", required=True,
-              type=click.Path(exists=True, file_okay=False, dir_okay=True),
-              help="The root directory of the app")
-@click.option("--app-path-in-root-dir", "app_path_in_root", type=str, required=True,
-              help="The path to the app in the root directory")
-@click.option("--app-object", "app_obj", type=str, required=True,
-              help="The name of the app object in the app file")
-@click.option("--data-dir", "data_dir", default=None,
-              type=click.Path(exists=True, resolve_path=True, file_okay=False, dir_okay=True))
-@click.option("-n", "--name", "name", type=str, required=True,
-              help="The name of the app you want to deploy")
-@click.option("-a", "--alias", "latest_alias_name", type=str, required=True,
-              help="The alias name of the model that will be deployed")
-@click.option("--make-experiment", "make_experiment", type=bool, default=True,
-              help="Whether to create a new experiment")
-@click.option("--experiment-name", "experiment_name", type=str, default=None,
-              help="The name of the experiment to create")
-@click.option("-r", "--register-model", "register_model", type=bool, default=True,
-              help="Whether to register the model")
-@click.option("-p", "--databricks-profile", "databricks_profile", type=str, default=None,
-              help="The databricks profile to use. This is the section name in ~/.databrickscfg file.")
-@click.option("-e", "--env", "env", type=str, default=None,
-              help="The environment to deploy the api to")
-@click.option("--only-last-n-versions", "only_last_n_versions", type=int, default=None,
-              help="The number of versions to keep")
-@click.option("--bootstrap-python-script", "bootstrap_python_script",
-              type=click.Path(exists=True, file_okay=True), default=None,
-              help="The bootstrap script to run on each container")
+@apply_build_options
 @click.pass_context
-def deploy(ctx, *,
-           uc_catalog: str,
-           uc_schema: str,
-           app_root_dir: str,
-           app_path_in_root: str,
-           app_obj: str,
-           data_dir: str,
-           name: str,
-           latest_alias_name: str,
-           make_experiment: bool,
-           experiment_name: str,
-           register_model: bool,
-           databricks_profile: str,
-           only_last_n_versions: int,
-           bootstrap_python_script: str,
-           env: str,
-           ):
+def build(ctx, *,
+          uc_catalog: str,
+          uc_schema: str,
+          app_root_dir: str,
+          app_path_in_root: str,
+          app_obj: str,
+          data_dir: str,
+          name: str,
+          latest_alias_name: str,
+          make_experiment: bool,
+          experiment_name: str,
+          register_model: bool,
+          databricks_profile: str,
+          only_last_n_versions: int,
+          bootstrap_python_script: str,
+          env: str,
+          ):
     """
-    Deploy a model to databricks model registry
+    Build a model and save to databricks model registry
     """
     ensure_databrickscfg_exists()
     if databricks_profile is not None:
@@ -354,6 +367,15 @@ def deploy(ctx, *,
         click.echo(click.style("Skipping model registration", fg="yellow"))
 
 
+@cli.command("deploy", context_settings=CONTEXT_SETTINGS, deprecated=True, hidden=True)
+@apply_build_options
+@click.pass_context
+def deploy_deprecated(ctx, *args, **kwargs):
+    """Use `build` instead. This command will be removed in future releases!"""
+    click.echo('WARNING: `old_command` is deprecated, use `build` instead.')
+    build(ctx, *args, **kwargs)
+
+
 @cli.command(context_settings=CONTEXT_SETTINGS)
 @click.option("-c", "--catalog", "uc_catalog", type=str, required=True,
               help="The unity catalog name of the model")
@@ -397,13 +419,20 @@ def serve(ctx, *,
           size: str,
           scale_to_zero_enabled: bool,
           prod: bool,
-          type: str, # noqa
+          type: str,  # noqa
           ):
     """
     Deploy a serving endpoint to databricks model serving
     """
     ws = WorkspaceClient(profile=databricks_profile)
     uc_name = make_full_uc_path(uc_catalog, uc_schema, name)
+    if databricks_profile is not None:
+        profile = get_profile_contents(databricks_profile)
+        configure_mlflow_to_databricks(os.environ, profile)
+        host = get_only_host(profile.host)
+    else:
+        host = get_only_host(os.environ["DATABRICKS_HOST"])
+
     click.echo(click.style(
         f"Deploying serving endpoint: {endpoint_name} for model: {uc_name} with version: {latest_alias_name}",
         fg="green"))
@@ -422,6 +451,9 @@ def serve(ctx, *,
 
     if endpoint_name is None:
         raise click.ClickException("Endpoint name must be provided")
+
+    events_url = get_endpoint_events_url(host, endpoint_name)
+    click.echo(click.style(f"Follow Endpoint Events at URL: {events_url}", fg="green"))
 
     deploy_serving_endpoint(ws_client=ws,
                             endpoint_name=endpoint_name,
@@ -467,22 +499,31 @@ def make_hotreload_threads(ws_client: WorkspaceClient,
     return reload_threads
 
 
+def apply_connect_options(f: Callable):
+    options = [
+        click.option("--endpoint-name", "endpoint_name",
+                     required=True,
+                     help="The name of the databricks endpoint to explore",
+                     type=str),
+        click.option("-p", "--databricks-profile", "databricks_profile",
+                     help="The databricks profile to use. This is the section name in ~/.databrickscfg file.",
+                     type=str,
+                     default=None),
+        click.option("-d", "--debug", "debug", is_flag=True, default=False),
+        click.option("-h", "--headless", "headless", is_flag=True, default=False,
+                     help="Run local swagger server without opening browser"),
+        click.option("-r", "--reload", "reload", is_flag=True, default=False,
+                     help="Reload remotely deployed endpoint")
+    ]
+    for option in options:
+        f = option(f)
+    return f
+
+
 @cli.command(context_settings=CONTEXT_SETTINGS)
-@click.option("--endpoint-name", "endpoint_name",
-              required=True,
-              help="The name of the databricks endpoint to explore",
-              type=str)
-@click.option("-p", "--databricks-profile", "databricks_profile",
-              help="The databricks profile to use. This is the section name in ~/.databrickscfg file.",
-              type=str,
-              default=None)
-@click.option("-d", "--debug", "debug", is_flag=True, default=False)
-@click.option("-h", "--headless", "headless", is_flag=True, default=False,
-              help="Run local swagger server without opening browser")
-@click.option("-r", "--reload", "reload", is_flag=True, default=False,
-              help="Reload remotely deployed endpoint")
+@apply_connect_options
 @click.pass_context
-def swagger(
+def connect(
         ctx,
         endpoint_name: str,
         databricks_profile: str,
@@ -530,6 +571,14 @@ def swagger(
             t.join()
 
     logging_thread.join()
+
+
+@cli.command("swagger", context_settings=CONTEXT_SETTINGS, deprecated=True, hidden=True)
+@apply_connect_options
+@click.pass_context
+def swagger_deprecated(ctx, *args, **kwargs):
+    """Use `connect` instead. This command will be removed in future releases!"""
+    connect(ctx, *args, **kwargs)
 
 
 @cli.command()
